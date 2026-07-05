@@ -820,7 +820,7 @@ function marketScreen() {
         <div class="eyebrow">Marketplace</div>
         <h1 class="h1">Buy &amp; sell on campus</h1>
       </div>
-      <button class="btn btn-accent btn-sm" data-act="open-sell">＋ Sell</button>
+      ${state.user.role === "vendor" ? `<button class="btn btn-accent btn-sm" data-act="open-sell">＋ Sell</button>` : ""}
     </div>
     <div class="market-tools">
       <div class="search-wrap">
@@ -913,7 +913,12 @@ function shopScreen() {
         <div class="row-title">${esc(p.name)}</div>
         <div class="row-sub">${naira(p.price)} · cost ${naira(p.cost)} · margin ${naira(p.price - p.cost)}</div>
       </div>
-      <span class="stock-pill ${p.stock <= 5 ? "stock-low" : "stock-ok"}">${p.stock} left</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+        <span class="stock-pill ${p.stock <= 5 ? "stock-low" : "stock-ok"}">${p.stock} left</span>
+        ${p.listed
+          ? `<button class="btn btn-ghost btn-sm" data-unlist-product="${p.id}">✅ Listed</button>`
+          : `<button class="btn btn-accent btn-sm" data-list-product="${p.id}">📢 List</button>`}
+      </div>
     </div>`).join("");
 
   const salesRows = state.sales.map((s) => `
@@ -1862,6 +1867,7 @@ function openShop(shopId) {
 
 /* --- sell form --- */
 function showSell() {
+  if (state.user.role !== "vendor") return;
   const opts = state.cats.filter((c) => c !== "All")
     .map((c) => `<option>${esc(c)}</option>`).join("");
   let photo = null;
@@ -1889,6 +1895,44 @@ function showSell() {
       img: photo || img("photo-1553062407-98eeb64c6a62"),
     });
     closeModal(); render(); toast("Your item is live! 🎉");
+  });
+}
+
+/* --- list an existing inventory product on the marketplace --- */
+function showListProduct(productId) {
+  const p = state.products.find((x) => x.id === productId);
+  if (!p) return;
+  const opts = state.cats.filter((c) => c !== "All")
+    .map((c) => `<option>${esc(c)}</option>`).join("");
+  let photo = p.img || null;
+  openModal(`
+    ${modalHead("List on marketplace")}
+    ${uploadHTML("Add a photo of your item")}
+    <input id="lpTitle" class="input" placeholder="What are you selling?" value="${esc(p.name)}" />
+    <input id="lpPrice" class="input" type="number" placeholder="Price (₦)" value="${p.price}" />
+    <select id="lpCat" class="input">${opts}</select>
+    <input id="lpLoc" class="input" placeholder="Pickup location (e.g. Moremi Hall)" />
+    <textarea id="lpDesc" class="input" rows="3" placeholder="Describe it briefly…"></textarea>
+    <button class="btn btn-primary btn-block" id="lpGo">List on market</button>
+  `);
+  bindUpload((data) => { photo = data; });
+  $("#lpGo").addEventListener("click", () => {
+    const title = $("#lpTitle").value.trim();
+    const price = Number($("#lpPrice").value);
+    if (!title || !price) return toast("Add a title and price first");
+    const listing = {
+      id: Date.now(), title, price,
+      cat: $("#lpCat").value,
+      loc: $("#lpLoc").value.trim() || "Campus",
+      desc: $("#lpDesc").value.trim(),
+      seller: (state.user.business && state.user.business.name) || "You",
+      productId: p.id,
+      img: photo || img("photo-1553062407-98eeb64c6a62"),
+    };
+    state.listings.unshift(listing);
+    p.listed = true;
+    p.listingId = listing.id;
+    closeModal(); render(); toast("Added to marketplace! 🎉");
   });
 }
 
@@ -2415,6 +2459,18 @@ function bindScreenEvents() {
   if (saleBtn) saleBtn.addEventListener("click", showSale);
   const prodBtn = document.querySelector('[data-act="open-product"]');
   if (prodBtn) prodBtn.addEventListener("click", showProduct);
+  document.querySelectorAll("[data-list-product]").forEach((b) =>
+    b.addEventListener("click", () => showListProduct(Number(b.dataset.listProduct))));
+  document.querySelectorAll("[data-unlist-product]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const id = Number(b.dataset.unlistProduct);
+      const p = state.products.find((x) => x.id === id);
+      if (!p) return;
+      state.listings = state.listings.filter((l) => l.id !== p.listingId);
+      p.listed = false;
+      p.listingId = null;
+      render(); toast("Removed from marketplace");
+    }));
 
   // orders: complete → records the sale, updates stock and trust stats
   document.querySelectorAll("[data-complete]").forEach((b) =>
