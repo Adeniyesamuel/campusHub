@@ -37,9 +37,10 @@ const state = {
     { id: 1, title: "HP EliteBook 840 G5", price: 185000, cat: "Electronics", seller: "Adaeze O.", loc: "Moremi Hall", desc: "8GB RAM, 256GB SSD. Very clean, light use. Charger included.", img: img("photo-1496181133206-80ce9b88a853") },
     { id: 2, title: "GST 102 Textbook (New Edition)", price: 2500, cat: "Books", seller: "Tunde B.", loc: "Faculty of Arts", desc: "Barely used, no markings inside.", img: img("photo-1544716278-ca5e3f4abd8c") },
     { id: 3, title: "Mini Fridge", price: 45000, cat: "Hostel Items", seller: "Kemi A.", loc: "Makama Hall", desc: "Perfect for hostel room. Works perfectly, selling because I'm graduating.", img: img("photo-1571175443880-49e1d25b2bc5") },
-    { id: 4, title: "Oud Perfume Oil (12ml)", price: 3500, cat: "Fashion & Beauty", seller: "Lagos Scents", loc: "New Hall Gate", desc: "Long-lasting oil perfume. Wholesale price available for 6+.", img: img("photo-1541643600914-78b084683601") },
+    { id: 4, title: "Oud Perfume Oil (12ml)", price: 3500, cat: "Fashion & Beauty", seller: "Lagos Scents", shopId: 1, loc: "New Hall Gate", desc: "Long-lasting oil perfume. Wholesale price available for 6+.", img: img("photo-1541643600914-78b084683601") },
     { id: 5, title: "Scientific Calculator fx-991", price: 7000, cat: "Electronics", seller: "Emeka N.", loc: "Engineering Block", desc: "Original Casio. Slight scratch on cover, screen perfect.", img: img("photo-1587145820266-a5951ee6f620") },
-    { id: 6, title: "Ankara Two-Piece (M)", price: 9500, cat: "Fashion & Beauty", seller: "Bisi Stitches", loc: "Amina Hall", desc: "Tailored, never worn. Can sew to your size in 3 days.", img: img("photo-1445205170230-053b83016050") },
+    { id: 6, title: "Ankara Two-Piece (M)", price: 9500, cat: "Fashion & Beauty", seller: "Bisi Stitches", shopId: 2, loc: "Amina Hall", desc: "Tailored, never worn. Can sew to your size in 3 days.", img: img("photo-1445205170230-053b83016050") },
+    { id: 7, title: "Portrait Photoshoot Session (1hr)", price: 15000, cat: "Services", seller: "SnapByEmeka", shopId: 3, loc: "Lagoon Front / Your Hall", desc: "Professional portraits — graduation, birthday shoots, or your matric photos. 20 edited pictures included.", img: img("photo-1554048612-b6a482bc67e5") },
   ],
   cats: ["All", "Electronics", "Books", "Hostel Items", "Fashion & Beauty", "Food", "Services"],
   events: [
@@ -92,6 +93,53 @@ const state = {
   ],
   chats: {},          // { "Seller Name": [ {from:"me"|"them", text, time} ] }
   chatWith: null,     // name of the person the chat panel is open with
+
+  /* ---- Storefronts (buyer-facing shops) ---- */
+  shops: [
+    {
+      id: 1, name: "Lagos Scents", owner: "Sadiq A.", cat: "Fashion & Beauty",
+      desc: "Long-lasting oil perfumes at student-friendly prices. Wholesale for resellers.",
+      verified: true, studentVendor: true, uni: "UNILAG", dept: "Marketing", level: "300 Level",
+      ratingSum: 46, ratingCount: 10, sales: 87, followers: 132, youFollow: false,
+      reviews: [
+        { who: "Kemi A.", stars: 5, text: "The oud lasted from morning lectures till night class. Certified plug 🔥", time: "2 days ago" },
+        { who: "Tunde B.", stars: 4, text: "Quick delivery to my hall. Would buy again.", time: "1 week ago" },
+      ],
+    },
+    {
+      id: 2, name: "Bisi Stitches", owner: "Bisi O.", cat: "Fashion & Beauty",
+      desc: "Custom tailoring and ready-to-wear. Ankara sets, corporate wear, matric outfits.",
+      verified: true, studentVendor: true, uni: "UNILAG", dept: "Business Administration", level: "400 Level",
+      ratingSum: 38, ratingCount: 8, sales: 54, followers: 96, youFollow: false,
+      reviews: [
+        { who: "Adaeze O.", stars: 5, text: "She sewed my two-piece in 3 days and it fit PERFECTLY.", time: "3 days ago" },
+      ],
+    },
+    {
+      id: 3, name: "SnapByEmeka", owner: "Emeka N.", cat: "Tutoring & Services",
+      desc: "Campus photographer — portraits, events, graduation shoots. Same-week edited delivery.",
+      verified: true, studentVendor: true, uni: "UNILAG", dept: "Mass Communication", level: "200 Level",
+      ratingSum: 29, ratingCount: 6, sales: 41, followers: 210, youFollow: false,
+      reviews: [
+        { who: "Femi O.", stars: 5, text: "My birthday shoot came out clean. He knows his angles.", time: "5 days ago" },
+      ],
+    },
+  ],
+
+  /* ---- The logged-in vendor's own shop ---- */
+  myShop: {
+    followers: 23,
+    reviews: [
+      { who: "Zainab A.", stars: 5, text: "Original product, fast response. Trusted seller!", time: "Yesterday" },
+      { who: "Musa L.", stars: 4, text: "Good price. Delivery took a bit but worth it.", time: "4 days ago" },
+    ],
+    orders: [
+      { id: 1, buyer: "Kemi A.", pid: 1, qty: 2, status: "new", time: "10:12 AM" },
+      { id: 2, buyer: "Tunde B.", pid: 3, qty: 1, status: "new", time: "9:47 AM" },
+      { id: 3, buyer: "Adaeze O.", pid: 2, qty: 3, status: "completed", time: "Yesterday" },
+    ],
+    completedSales: 12,
+  },
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
@@ -641,6 +689,45 @@ function myChannels() {
 function homeScreen() {
   const channels = myChannels();
 
+  /* ---- For You ---- */
+  const firstName = (state.user.name || "there").split(" ")[0];
+  const topMat = [...state.materials].sort((a, b) => (b.sum / b.count) - (a.sum / a.count))[0];
+  const hostelCount = state.listings.filter((l) => l.cat === "Hostel Items").length;
+  const academic = !!state.user.level;
+  const forYou = `
+    <div class="fy-hero">
+      <div class="fy-hi">👋 Welcome back, ${esc(firstName)}</div>
+      <div class="fy-sub">Here's what's new on campus today</div>
+    </div>
+    <div class="fy-grid">
+      <button class="fy-tile fy-hot" data-goto="${academic ? "study-materials" : "market"}">
+        <div class="fy-ico">🔥</div>
+        <div class="fy-label">Trending today</div>
+        <div class="fy-value fy-small">${esc(academic && topMat ? topMat.title : "Portrait photoshoot sessions")}</div>
+      </button>
+      <button class="fy-tile" data-goto="events">
+        <div class="fy-ico">🎉</div>
+        <div class="fy-value">${state.events.length}</div>
+        <div class="fy-label">Events this week</div>
+      </button>
+      <button class="fy-tile" data-goto="market">
+        <div class="fy-ico">🛒</div>
+        <div class="fy-value">${state.listings.length}</div>
+        <div class="fy-label">New marketplace listings</div>
+      </button>
+      <button class="fy-tile" data-goto="market-hostel">
+        <div class="fy-ico">🏠</div>
+        <div class="fy-value">${hostelCount}</div>
+        <div class="fy-label">Hostel listings</div>
+      </button>
+      ${academic ? `
+      <button class="fy-tile" data-goto="study-materials">
+        <div class="fy-ico">📚</div>
+        <div class="fy-value">${state.materials.length}</div>
+        <div class="fy-label">Study resources</div>
+      </button>` : ""}
+    </div>`;
+
   // channel chips: All + each of the user's channels
   const chips = ["All", ...channels].map((c) =>
     `<button class="chip ${state.feedFilter === c ? "active" : ""}" data-feed="${esc(c)}">${esc(c)}</button>`).join("");
@@ -678,6 +765,7 @@ function homeScreen() {
     </div>`).join("");
 
   return `
+    ${forYou}
     <div class="section-head">
       <div>
         <div class="eyebrow">Campus feed</div>
@@ -812,6 +900,9 @@ function shopScreen() {
   const revenue = state.sales.reduce((s, x) => s + x.total, 0);
   const profit = state.sales.reduce((s, x) => s + x.profit, 0);
   const low = state.products.filter((p) => p.stock <= 5).length;
+  const ms = state.myShop;
+  const avg = ms.reviews.length ? ms.reviews.reduce((s, r) => s + r.stars, 0) / ms.reviews.length : 0;
+  const newOrders = ms.orders.filter((o) => o.status === "new");
 
   const inventory = state.products.map((p) => `
     <div class="card row-item">
@@ -838,6 +929,38 @@ function shopScreen() {
       </div>
     </div>`).join("");
 
+  const orderRows = ms.orders.map((o) => {
+    const p = state.products.find((x) => x.id === o.pid);
+    if (!p) return "";
+    return `
+      <div class="card row-item">
+        <div class="row-ico">${o.status === "new" ? "🛎️" : "✅"}</div>
+        <div class="row-main">
+          <div class="row-title">${o.qty} × ${esc(p.name)}</div>
+          <div class="row-sub">from ${esc(o.buyer)} · ${esc(o.time)} · ${naira(p.price * o.qty)}</div>
+        </div>
+        ${o.status === "new"
+          ? `<div style="display:flex;gap:6px">
+               <button class="btn btn-ghost btn-sm" data-chat-buyer="${esc(o.buyer)}">💬</button>
+               <button class="btn btn-accent btn-sm" data-complete="${o.id}">Complete</button>
+             </div>`
+          : `<span class="stock-pill stock-ok">Completed</span>`}
+      </div>`;
+  }).join("");
+
+  const reviewRows = ms.reviews.map((r) => `
+    <div class="card">
+      <div class="post-head" style="margin-bottom:4px">
+        <div class="post-avatar">${esc(r.who[0])}</div>
+        <div style="flex:1">
+          <div class="post-who">${esc(r.who)}</div>
+          <div class="post-time">${esc(r.time)}</div>
+        </div>
+        <span class="mat-stars">${"★".repeat(r.stars)}${"☆".repeat(5 - r.stars)}</span>
+      </div>
+      <p class="post-body">${esc(r.text)}</p>
+    </div>`).join("");
+
   return `
     <div class="section-head">
       <div>
@@ -845,6 +968,14 @@ function shopScreen() {
         <h1 class="h1">Vendor dashboard</h1>
       </div>
     </div>
+
+    <div class="trust-strip">
+      <div class="trust-stat"><b>👥 ${ms.followers}</b><span>followers</span></div>
+      <div class="trust-stat"><b>⭐ ${avg.toFixed(1)}</b><span>${ms.reviews.length} reviews</span></div>
+      <div class="trust-stat"><b>✅ ${ms.completedSales}</b><span>completed sales</span></div>
+      <div class="trust-stat"><b>🛎️ ${newOrders.length}</b><span>new orders</span></div>
+    </div>
+
     <div class="shop-grid">
       <div class="profit-card">
         <div class="profit-label">Today so far</div>
@@ -862,6 +993,10 @@ function shopScreen() {
         <div class="t-sub">${low > 0 ? `${low} item${low > 1 ? "s" : ""} low on stock` : "Stock looks healthy"}</div>
       </button>
     </div>
+
+    <div class="section-head"><div><div class="eyebrow">Incoming</div><h3 class="h3">Orders</h3></div></div>
+    ${orderRows || `<div class="empty">No orders yet — share your shop link!</div>`}
+
     <div class="shop-two">
       <div>
         <div class="section-head"><div class="eyebrow">Inventory</div><span class="row-sub">${state.products.length} products</span></div>
@@ -870,6 +1005,8 @@ function shopScreen() {
       <div>
         <div class="section-head"><div class="eyebrow">Sales today</div></div>
         ${salesRows}
+        <div class="section-head"><div class="eyebrow">What buyers say</div><span class="mat-stars">${stars(avg)}</span></div>
+        ${reviewRows}
       </div>
     </div>`;
 }
@@ -1614,6 +1751,34 @@ const modalHead = (title) => `
 function showItem(id) {
   const l = state.listings.find((x) => x.id === id);
   if (!l) return;
+  const shop = l.shopId ? state.shops.find((s) => s.id === l.shopId) : null;
+
+  const trustCard = shop ? `
+    <div class="trust-card">
+      <div class="trust-top">
+        <div class="post-avatar">${esc(shop.name[0])}</div>
+        <div style="flex:1">
+          <div class="trust-name">${esc(shop.name)} <span class="verified-badge">✅ Verified Student</span></div>
+          <div class="trust-meta">${esc(shop.uni)} · ${esc(shop.dept)} · ${esc(shop.level)}</div>
+        </div>
+      </div>
+      <div class="trust-stats">
+        <span>⭐ ${(shop.ratingSum / shop.ratingCount).toFixed(1)} (${shop.ratingCount})</span>
+        <span>✅ ${shop.sales} completed sales</span>
+        <span>👥 ${shop.followers} followers</span>
+      </div>
+      <button class="btn btn-ghost btn-block" data-open-shop="${shop.id}" style="margin-top:10px">🏬 View shop</button>
+    </div>` : `
+    <div class="trust-card">
+      <div class="trust-top">
+        <div class="post-avatar">${esc(l.seller[0])}</div>
+        <div style="flex:1">
+          <div class="trust-name">${esc(l.seller)} <span class="verified-badge">✅ Verified Student</span></div>
+          <div class="trust-meta">University of Lagos · identity confirmed at signup</div>
+        </div>
+      </div>
+    </div>`;
+
   openModal(`
     ${modalHead("Listing")}
     ${imgBlock(l.img, "detail-img")}
@@ -1621,10 +1786,78 @@ function showItem(id) {
     <div class="detail-title">${esc(l.title)}</div>
     <div class="detail-price">${naira(l.price)}</div>
     <p class="detail-desc">${esc(l.desc)}</p>
-    <div class="detail-meta">📍 ${esc(l.loc)} · Sold by <b>${esc(l.seller)}</b></div>
-    <button class="btn btn-primary btn-block" id="msgSeller">Message seller</button>
+    <div class="detail-meta">📍 ${esc(l.loc)}</div>
+    ${trustCard}
+    <button class="btn btn-primary btn-block" id="msgSeller" style="margin-top:12px">💬 Message seller</button>
   `);
   $("#msgSeller").addEventListener("click", () => openChat(l.seller));
+  const vs = document.querySelector("[data-open-shop]");
+  if (vs) vs.addEventListener("click", () => openShop(Number(vs.dataset.openShop)));
+}
+
+/* --- buyer-facing storefront --- */
+function openShop(shopId) {
+  const s = state.shops.find((x) => x.id === shopId);
+  if (!s) return;
+  const products = state.listings.filter((l) => l.shopId === s.id);
+  const avg = s.ratingSum / s.ratingCount;
+
+  const prodGrid = products.map((p) => `
+    <button class="listing" data-shop-item="${p.id}">
+      ${imgBlock(p.img, "thumb")}
+      <div class="listing-body">
+        <div class="listing-title">${esc(p.title)}</div>
+        <div class="price">${naira(p.price)}</div>
+      </div>
+    </button>`).join("");
+
+  const reviews = s.reviews.map((r) => `
+    <div class="card" style="margin-bottom:8px">
+      <div class="post-head" style="margin-bottom:4px">
+        <div class="post-avatar">${esc(r.who[0])}</div>
+        <div style="flex:1">
+          <div class="post-who">${esc(r.who)}</div>
+          <div class="post-time">${esc(r.time)}</div>
+        </div>
+        <span class="mat-stars">${"★".repeat(r.stars)}${"☆".repeat(5 - r.stars)}</span>
+      </div>
+      <p class="post-body">${esc(r.text)}</p>
+    </div>`).join("");
+
+  openModal(`
+    ${modalHead("Shop")}
+    <div class="shop-hero">
+      <div class="shop-hero-avatar">${esc(s.name[0])}</div>
+      <div class="trust-name" style="font-size:20px">${esc(s.name)} <span class="verified-badge">✅ Verified Student</span></div>
+      <div class="trust-meta">${esc(s.uni)} · ${esc(s.dept)} · ${esc(s.level)} · run by ${esc(s.owner)}</div>
+      <p class="detail-desc" style="margin-top:6px">${esc(s.desc)}</p>
+      <div class="shop-hero-stats">
+        <div><b>⭐ ${avg.toFixed(1)}</b><span>${s.ratingCount} ratings</span></div>
+        <div><b>${s.sales}</b><span>completed sales</span></div>
+        <div><b id="folCount">${s.followers}</b><span>followers</span></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn ${s.youFollow ? "btn-ghost" : "btn-accent"}" style="flex:1" id="folBtn">${s.youFollow ? "Following ✓" : "＋ Follow"}</button>
+        <button class="btn btn-primary" style="flex:1" id="shopMsg">💬 Message</button>
+      </div>
+    </div>
+    <div class="set-group">Products (${products.length})</div>
+    <div class="grid" style="grid-template-columns:repeat(2,1fr)">${prodGrid || `<div class="empty">No products listed yet</div>`}</div>
+    <div class="set-group">Reviews (${s.reviews.length})</div>
+    ${reviews || `<div class="empty">No reviews yet</div>`}
+  `, true);
+
+  $("#folBtn").addEventListener("click", () => {
+    s.youFollow = !s.youFollow;
+    s.followers += s.youFollow ? 1 : -1;
+    $("#folCount").textContent = s.followers;
+    $("#folBtn").textContent = s.youFollow ? "Following ✓" : "＋ Follow";
+    $("#folBtn").className = "btn " + (s.youFollow ? "btn-ghost" : "btn-accent");
+    toast(s.youFollow ? "Following " + s.name + " 🔔" : "Unfollowed " + s.name);
+  });
+  $("#shopMsg").addEventListener("click", () => openChat(s.name));
+  document.querySelectorAll("[data-shop-item]").forEach((b) =>
+    b.addEventListener("click", () => showItem(Number(b.dataset.shopItem))));
 }
 
 /* --- sell form --- */
@@ -1655,7 +1888,7 @@ function showSell() {
       seller: "You",
       img: photo || img("photo-1553062407-98eeb64c6a62"),
     });
-    closeModal(); render(); toast("Item posted to the market");
+    closeModal(); render(); toast("Your item is live! 🎉");
   });
 }
 
@@ -2182,6 +2415,35 @@ function bindScreenEvents() {
   if (saleBtn) saleBtn.addEventListener("click", showSale);
   const prodBtn = document.querySelector('[data-act="open-product"]');
   if (prodBtn) prodBtn.addEventListener("click", showProduct);
+
+  // orders: complete → records the sale, updates stock and trust stats
+  document.querySelectorAll("[data-complete]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const o = state.myShop.orders.find((x) => x.id === Number(b.dataset.complete));
+      const p = state.products.find((x) => x.id === o.pid);
+      if (!p || p.stock < o.qty) return toast("Not enough stock to complete this order");
+      p.stock -= o.qty;
+      o.status = "completed";
+      state.myShop.completedSales++;
+      state.sales.unshift({
+        id: Date.now(), name: p.name, qty: o.qty,
+        total: p.price * o.qty, profit: (p.price - p.cost) * o.qty, time: timeNow(),
+      });
+      render(); toast("Order completed — sale recorded ✅");
+    }));
+  document.querySelectorAll("[data-chat-buyer]").forEach((b) =>
+    b.addEventListener("click", () => openChat(b.dataset.chatBuyer)));
+
+  // For You tiles
+  document.querySelectorAll("[data-goto]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const go = b.dataset.goto;
+      if (go === "events") state.tab = "events";
+      else if (go === "market") { state.tab = "market"; state.cat = "All"; }
+      else if (go === "market-hostel") { state.tab = "market"; state.cat = "Hostel Items"; }
+      else if (go === "study-materials") { state.tab = "study"; state.studyTab = "materials"; }
+      render(); window.scrollTo(0, 0);
+    }));
 
   // study hub
   bindStudyEvents();

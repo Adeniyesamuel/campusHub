@@ -941,3 +941,86 @@ body.dark .form-hint { color: var(--faint); }
 body.dark .modal-close { color: #d6d4f5; }
 body.dark .up-text { color: var(--indigo-300); }
 body.dark .verified-badge { background: var(--indigo-50); color: var(--indigo-300); }
+
+/* ==========================================================
+   For You + trust + storefronts
+   ========================================================== */
+.fy-hero { padding: 18px 0 4px; }
+.fy-hi { font-size: 24px; font-weight: 800; letter-spacing: -0.5px; color: var(--indigo-950); }
+.fy-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.fy-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 10px; margin: 14px 0 6px;
+}
+.fy-tile {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px; padding: 14px; text-align: left;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.fy-tile:hover { border-color: var(--orange-400); transform: translateY(-1px); }
+.fy-tile.fy-hot {
+  grid-column: 1 / -1;
+  background: linear-gradient(120deg, var(--indigo-950), #4c1d95);
+  border: none;
+}
+.fy-tile.fy-hot .fy-label { color: var(--orange-300); }
+.fy-tile.fy-hot .fy-value { color: #fff; }
+.fy-ico { font-size: 18px; }
+.fy-value { font-size: 22px; font-weight: 800; color: var(--indigo-950); margin-top: 4px; letter-spacing: -0.5px; }
+.fy-value.fy-small { font-size: 14px; line-height: 1.35; }
+.fy-label { font-size: 11px; font-weight: 700; color: var(--muted); margin-top: 2px; }
+
+/* trust card (listing detail) */
+.trust-card {
+  background: var(--indigo-50); border-radius: 14px;
+  padding: 13px 14px; margin-top: 14px;
+}
+.trust-top { display: flex; gap: 10px; align-items: center; }
+.trust-name { font-size: 14px; font-weight: 800; color: var(--indigo-950); }
+.trust-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.trust-stats {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  font-size: 12px; font-weight: 700; color: var(--indigo-900);
+  margin-top: 10px;
+}
+
+/* vendor dashboard trust strip */
+.trust-strip {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 10px; margin-bottom: 12px;
+}
+.trust-stat {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 12px 8px; text-align: center;
+}
+.trust-stat b { display: block; font-size: 16px; color: var(--indigo-950); }
+.trust-stat span { font-size: 10px; font-weight: 700; color: var(--muted); }
+
+/* storefront */
+.shop-hero { text-align: center; padding: 4px 0 6px; }
+.shop-hero-avatar {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--indigo-700), var(--indigo-950));
+  color: var(--orange-300); font-weight: 800; font-size: 26px;
+  display: grid; place-items: center; margin: 0 auto 10px;
+}
+.shop-hero-stats {
+  display: flex; justify-content: center; gap: 26px; margin-top: 12px;
+}
+.shop-hero-stats b { display: block; font-size: 17px; color: var(--indigo-950); }
+.shop-hero-stats span { font-size: 11px; font-weight: 700; color: var(--muted); }
+
+@media (min-width: 820px) {
+  .fy-grid { grid-template-columns: repeat(4, 1fr); }
+  .fy-tile.fy-hot { grid-column: span 4; }
+}
+@media (max-width: 480px) {
+  .trust-strip { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* dark mode for the new pieces */
+body.dark .fy-hi, body.dark .fy-value,
+body.dark .trust-name, body.dark .trust-stat b,
+body.dark .shop-hero-stats b { color: #f2f1ff; }
+body.dark .trust-stats { color: var(--indigo-300); }
+body.dark .trust-card { background: var(--indigo-50); }
