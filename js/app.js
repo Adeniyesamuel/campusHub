@@ -33,15 +33,7 @@ const state = {
   tab: "home",
   cat: "All",
   query: "",
-  listings: [
-    { id: 1, title: "HP EliteBook 840 G5", price: 185000, cat: "Electronics", seller: "Adaeze O.", loc: "Moremi Hall", desc: "8GB RAM, 256GB SSD. Very clean, light use. Charger included.", img: img("photo-1496181133206-80ce9b88a853") },
-    { id: 2, title: "GST 102 Textbook (New Edition)", price: 2500, cat: "Books", seller: "Tunde B.", loc: "Faculty of Arts", desc: "Barely used, no markings inside.", img: img("photo-1544716278-ca5e3f4abd8c") },
-    { id: 3, title: "Mini Fridge", price: 45000, cat: "Hostel Items", seller: "Kemi A.", loc: "Makama Hall", desc: "Perfect for hostel room. Works perfectly, selling because I'm graduating.", img: img("photo-1571175443880-49e1d25b2bc5") },
-    { id: 4, title: "Oud Perfume Oil (12ml)", price: 3500, cat: "Fashion & Beauty", seller: "Lagos Scents", shopId: 1, loc: "New Hall Gate", desc: "Long-lasting oil perfume. Wholesale price available for 6+.", img: img("photo-1541643600914-78b084683601") },
-    { id: 5, title: "Scientific Calculator fx-991", price: 7000, cat: "Electronics", seller: "Emeka N.", loc: "Engineering Block", desc: "Original Casio. Slight scratch on cover, screen perfect.", img: img("photo-1587145820266-a5951ee6f620") },
-    { id: 6, title: "Ankara Two-Piece (M)", price: 9500, cat: "Fashion & Beauty", seller: "Bisi Stitches", shopId: 2, loc: "Amina Hall", desc: "Tailored, never worn. Can sew to your size in 3 days.", img: img("photo-1445205170230-053b83016050") },
-    { id: 7, title: "Portrait Photoshoot Session (1hr)", price: 15000, cat: "Services", seller: "SnapByEmeka", shopId: 3, loc: "Lagoon Front / Your Hall", desc: "Professional portraits — graduation, birthday shoots, or your matric photos. 20 edited pictures included.", img: img("photo-1554048612-b6a482bc67e5") },
-  ],
+  listings: [], // loaded from Supabase after login — see hydrateMarketplace()
   cats: ["All", "Electronics", "Books", "Hostel Items", "Fashion & Beauty", "Food", "Services"],
   events: [
     {
@@ -83,63 +75,13 @@ const state = {
     { id: 1, type: "lost", item: "Blue ID card wallet", where: "Around the library steps", who: "Femi O.", time: "Today, 10:05 AM" },
     { id: 2, type: "found", item: "Silver wristwatch", where: "LT1, back row", who: "Zainab A.", time: "Yesterday" },
   ],
-  products: [
-    { id: 1, name: "Oud Perfume Oil 12ml", price: 3500, cost: 2000, stock: 14, img: img("photo-1541643600914-78b084683601") },
-    { id: 2, name: "Arabian Musk 6ml", price: 2000, cost: 1100, stock: 23, img: img("photo-1592945403244-b3fbafd7f539") },
-    { id: 3, name: "Gift Box (3 oils)", price: 9000, cost: 5500, stock: 5, img: img("photo-1549465220-1a8b9238cd48") },
-  ],
-  sales: [
-    { id: 1, name: "Oud Perfume Oil 12ml", qty: 2, total: 7000, profit: 3000, time: "8:15 AM" },
-  ],
+  products: [], // vendor's own inventory — loaded from Supabase, see hydrateMarketplace()
+  sales: [],    // vendor's own sale ledger — loaded from Supabase
   chats: {},          // { "Seller Name": [ {from:"me"|"them", text, time} ] }
   chatWith: null,     // name of the person the chat panel is open with
 
-  /* ---- Storefronts (buyer-facing shops) ---- */
-  shops: [
-    {
-      id: 1, name: "Lagos Scents", owner: "Sadiq A.", cat: "Fashion & Beauty",
-      desc: "Long-lasting oil perfumes at student-friendly prices. Wholesale for resellers.",
-      verified: true, studentVendor: true, uni: "UNILAG", dept: "Marketing", level: "300 Level",
-      ratingSum: 46, ratingCount: 10, sales: 87, followers: 132, youFollow: false,
-      reviews: [
-        { who: "Kemi A.", stars: 5, text: "The oud lasted from morning lectures till night class. Certified plug 🔥", time: "2 days ago" },
-        { who: "Tunde B.", stars: 4, text: "Quick delivery to my hall. Would buy again.", time: "1 week ago" },
-      ],
-    },
-    {
-      id: 2, name: "Bisi Stitches", owner: "Bisi O.", cat: "Fashion & Beauty",
-      desc: "Custom tailoring and ready-to-wear. Ankara sets, corporate wear, matric outfits.",
-      verified: true, studentVendor: true, uni: "UNILAG", dept: "Business Administration", level: "400 Level",
-      ratingSum: 38, ratingCount: 8, sales: 54, followers: 96, youFollow: false,
-      reviews: [
-        { who: "Adaeze O.", stars: 5, text: "She sewed my two-piece in 3 days and it fit PERFECTLY.", time: "3 days ago" },
-      ],
-    },
-    {
-      id: 3, name: "SnapByEmeka", owner: "Emeka N.", cat: "Tutoring & Services",
-      desc: "Campus photographer — portraits, events, graduation shoots. Same-week edited delivery.",
-      verified: true, studentVendor: true, uni: "UNILAG", dept: "Mass Communication", level: "200 Level",
-      ratingSum: 29, ratingCount: 6, sales: 41, followers: 210, youFollow: false,
-      reviews: [
-        { who: "Femi O.", stars: 5, text: "My birthday shoot came out clean. He knows his angles.", time: "5 days ago" },
-      ],
-    },
-  ],
-
   /* ---- The logged-in vendor's own shop ---- */
-  myShop: {
-    followers: 23,
-    reviews: [
-      { who: "Zainab A.", stars: 5, text: "Original product, fast response. Trusted seller!", time: "Yesterday" },
-      { who: "Musa L.", stars: 4, text: "Good price. Delivery took a bit but worth it.", time: "4 days ago" },
-    ],
-    orders: [
-      { id: 1, buyer: "Kemi A.", pid: 1, qty: 2, status: "new", time: "10:12 AM" },
-      { id: 2, buyer: "Tunde B.", pid: 3, qty: 1, status: "new", time: "9:47 AM" },
-      { id: 3, buyer: "Adaeze O.", pid: 2, qty: 3, status: "completed", time: "Yesterday" },
-    ],
-    completedSales: 12,
-  },
+  myShop: { followers: 0, reviews: [], orders: [] },
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
@@ -484,6 +426,7 @@ function authScreen() {
    resets the post-login UI — shared by signup, login, and session restore */
 function hydrateUser(profileRow, businessRow, via) {
   state.user = {
+    id: profileRow.id,
     role: profileRow.role,
     via,
     vendorType: profileRow.vendor_type,
@@ -492,6 +435,7 @@ function hydrateUser(profileRow, businessRow, via) {
     level: profileRow.level,
     dept: profileRow.dept,
     business: businessRow ? {
+      id: businessRow.id,
       name: businessRow.name,
       cat: businessRow.category,
       desc: businessRow.description,
@@ -511,6 +455,70 @@ function hydrateUser(profileRow, businessRow, via) {
   state.authStep = "start";
   state.authStage = null;
   state.authId = "";
+}
+
+const fmtRowTime = (iso) =>
+  new Date(iso).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" });
+
+const mapListingRow = (row) => ({
+  id: row.id,
+  title: row.title,
+  price: row.price,
+  cat: row.category,
+  loc: row.location,
+  desc: row.description,
+  img: row.image_url,
+  seller: row.seller?.name || "CampusHub Vendor",
+  sellerId: row.seller_id,
+  productId: row.product_id,
+});
+
+const mapProductRow = (row) => ({
+  id: row.id, name: row.name, price: row.price, cost: row.cost,
+  stock: row.stock, img: row.image_url, listed: row.listed,
+});
+
+const mapOrderRow = (row) => ({
+  id: row.id, pid: row.product_id, buyer: row.buyer?.name || "Buyer",
+  qty: row.qty, status: row.status, time: fmtRowTime(row.created_at),
+});
+
+const mapSaleRow = (row) => {
+  const p = state.products.find((x) => x.id === row.product_id);
+  return { id: row.id, name: p ? p.name : "Product", qty: row.qty, total: row.total, profit: row.profit, time: fmtRowTime(row.created_at) };
+};
+
+/* loads the public marketplace feed for everyone, plus the vendor's own
+   inventory/orders/sales/shop stats if the logged-in user is a vendor */
+async function hydrateMarketplace() {
+  const { data: listingRows } = await sbGetListings();
+  state.listings = (listingRows || []).map(mapListingRow);
+
+  if (state.user.role === "vendor" && state.user.business && state.user.business.id) {
+    const shopId = state.user.business.id;
+
+    const { data: productRows } = await sbGetProducts(shopId);
+    state.products = (productRows || []).map(mapProductRow);
+
+    const { data: saleRows } = await sbGetSales(shopId);
+    state.sales = (saleRows || []).map(mapSaleRow);
+
+    const { data: orderRows } = await sbGetShopOrders(shopId);
+    state.myShop.orders = (orderRows || []).map(mapOrderRow);
+
+    const { data: reviewRows } = await sbGetShopReviews(shopId);
+    state.myShop.reviews = (reviewRows || []).map((r) => ({
+      who: r.reviewer?.name || "Buyer", stars: r.stars, text: r.text, time: fmtRowTime(r.created_at),
+    }));
+
+    const { count } = await sbGetFollowerCount(shopId);
+    state.myShop.followers = count || 0;
+  } else {
+    state.products = [];
+    state.sales = [];
+    state.myShop = { followers: 0, reviews: [], orders: [] };
+  }
+  render();
 }
 
 async function completeAuth(via) {
@@ -572,6 +580,7 @@ async function completeAuth(via) {
     ? (state.user.vendorType === "student" ? "a student vendor" : "a campus vendor")
     : "a student";
   toast((state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who);
+  await hydrateMarketplace();
 }
 
 function bindAuthEvents() {
@@ -1054,7 +1063,7 @@ function shopScreen() {
     <div class="trust-strip">
       <div class="trust-stat"><b>👥 ${ms.followers}</b><span>followers</span></div>
       <div class="trust-stat"><b>⭐ ${avg.toFixed(1)}</b><span>${ms.reviews.length} reviews</span></div>
-      <div class="trust-stat"><b>✅ ${ms.completedSales}</b><span>completed sales</span></div>
+      <div class="trust-stat"><b>✅ ${state.sales.length}</b><span>completed sales</span></div>
       <div class="trust-stat"><b>🛎️ ${newOrders.length}</b><span>new orders</span></div>
     </div>
 
@@ -1831,26 +1840,46 @@ const modalHead = (title) => `
   </div>`;
 
 /* --- listing detail --- */
-function showItem(id) {
+async function showItem(id) {
   const l = state.listings.find((x) => x.id === id);
   if (!l) return;
-  const shop = l.shopId ? state.shops.find((s) => s.id === l.shopId) : null;
+
+  // every real listing's seller is a vendor, so look up their business —
+  // falls back to the plain "verified student" card if none is found
+  let shop = null, sellerProfile = null, avg = null, reviewCount = 0, followerCount = 0, salesCount = 0;
+  if (l.sellerId) {
+    const { data: biz } = await sbGetBusiness(l.sellerId);
+    if (biz) {
+      shop = biz;
+      const [{ data: prof }, { data: reviews }, { count }, { data: sc }] = await Promise.all([
+        sbGetProfile(l.sellerId),
+        sbGetShopReviews(biz.id),
+        sbGetFollowerCount(biz.id),
+        sbGetPublicSalesCount(biz.id),
+      ]);
+      sellerProfile = prof;
+      reviewCount = (reviews || []).length;
+      avg = reviewCount ? reviews.reduce((s, r) => s + r.stars, 0) / reviewCount : null;
+      followerCount = count || 0;
+      salesCount = sc || 0;
+    }
+  }
 
   const trustCard = shop ? `
     <div class="trust-card">
       <div class="trust-top">
         <div class="post-avatar">${esc(shop.name[0])}</div>
         <div style="flex:1">
-          <div class="trust-name">${esc(shop.name)} <span class="verified-badge">✅ Verified Student</span></div>
-          <div class="trust-meta">${esc(shop.uni)} · ${esc(shop.dept)} · ${esc(shop.level)}</div>
+          <div class="trust-name">${esc(shop.name)} ${shop.verified ? '<span class="verified-badge">✅ Verified</span>' : ""}</div>
+          <div class="trust-meta">${sellerProfile && sellerProfile.level ? `${esc(sellerProfile.dept)} · ${esc(sellerProfile.level)}` : "University of Lagos"}</div>
         </div>
       </div>
       <div class="trust-stats">
-        <span>⭐ ${(shop.ratingSum / shop.ratingCount).toFixed(1)} (${shop.ratingCount})</span>
-        <span>✅ ${shop.sales} completed sales</span>
-        <span>👥 ${shop.followers} followers</span>
+        <span>${avg !== null ? `⭐ ${avg.toFixed(1)} (${reviewCount})` : "No reviews yet"}</span>
+        <span>✅ ${salesCount} completed sales</span>
+        <span>👥 ${followerCount} followers</span>
       </div>
-      <button class="btn btn-ghost btn-block" data-open-shop="${shop.id}" style="margin-top:10px">🏬 View shop</button>
+      <button class="btn btn-ghost btn-block" data-open-shop="${l.sellerId}" style="margin-top:10px">🏬 View shop</button>
     </div>` : `
     <div class="trust-card">
       <div class="trust-top">
@@ -1862,6 +1891,8 @@ function showItem(id) {
       </div>
     </div>`;
 
+  const canOrder = shop && l.productId && l.sellerId !== state.user.id;
+
   openModal(`
     ${modalHead("Listing")}
     ${imgBlock(l.img, "detail-img")}
@@ -1871,21 +1902,54 @@ function showItem(id) {
     <p class="detail-desc">${esc(l.desc)}</p>
     <div class="detail-meta">📍 ${esc(l.loc)}</div>
     ${trustCard}
+    ${canOrder ? `<button class="btn btn-accent btn-block" id="placeOrderBtn" style="margin-top:12px">🛒 Place order</button>` : ""}
     <button class="btn btn-primary btn-block" id="msgSeller" style="margin-top:12px">💬 Message seller</button>
   `);
   $("#msgSeller").addEventListener("click", () => openChat(l.seller));
   const vs = document.querySelector("[data-open-shop]");
-  if (vs) vs.addEventListener("click", () => openShop(Number(vs.dataset.openShop)));
+  if (vs) vs.addEventListener("click", () => openShop(vs.dataset.openShop));
+  const orderBtn = document.querySelector("#placeOrderBtn");
+  if (orderBtn) orderBtn.addEventListener("click", () => showPlaceOrder(l, shop.id));
+}
+
+/* --- buyer places an order for a product-backed listing --- */
+function showPlaceOrder(l, shopId) {
+  openModal(`
+    ${modalHead("Place order")}
+    ${imgBlock(l.img, "detail-img")}
+    <div class="detail-title">${esc(l.title)}</div>
+    <div class="detail-price">${naira(l.price)} each</div>
+    <input id="orderQty" class="input" type="number" min="1" value="1" placeholder="Quantity" />
+    <button class="btn btn-primary btn-block" id="orderGo">Place order</button>
+  `);
+  $("#orderGo").addEventListener("click", async () => {
+    const qty = Number($("#orderQty").value);
+    if (!qty || qty < 1) return toast("Enter a valid quantity");
+    const orderGo = $("#orderGo");
+    orderGo.disabled = true; orderGo.textContent = "Placing…";
+    const { error } = await sbInsertOrder({
+      shop_id: shopId, product_id: l.productId, buyer_id: state.user.id, qty,
+    });
+    if (error) { orderGo.disabled = false; orderGo.textContent = "Place order"; return toast("Couldn't place order: " + error.message); }
+    closeModal();
+    toast("Order placed! The vendor will confirm soon 🎉");
+  });
 }
 
 /* --- buyer-facing storefront --- */
-function openShop(shopId) {
-  const s = state.shops.find((x) => x.id === shopId);
-  if (!s) return;
-  const products = state.listings.filter((l) => l.shopId === s.id);
-  const avg = s.ratingSum / s.ratingCount;
+async function openShop(sellerId) {
+  const { data: biz } = await sbGetBusiness(sellerId);
+  if (!biz) return toast("This shop isn't available");
+  const { data: prof } = await sbGetProfile(sellerId);
+  const shopListings = state.listings.filter((l) => l.sellerId === sellerId);
+  const { data: reviews } = await sbGetShopReviews(biz.id);
+  const { count: followerCount } = await sbGetFollowerCount(biz.id);
+  const { data: followRow } = await sbIsFollowing(biz.id, state.user.id);
+  const { data: salesCount } = await sbGetPublicSalesCount(biz.id);
+  let youFollow = !!followRow;
+  const avg = reviews && reviews.length ? reviews.reduce((s, r) => s + r.stars, 0) / reviews.length : 0;
 
-  const prodGrid = products.map((p) => `
+  const prodGrid = shopListings.map((p) => `
     <button class="listing" data-shop-item="${p.id}">
       ${imgBlock(p.img, "thumb")}
       <div class="listing-body">
@@ -1894,53 +1958,67 @@ function openShop(shopId) {
       </div>
     </button>`).join("");
 
-  const reviews = s.reviews.map((r) => `
+  const reviewRows = (reviews || []).map((r) => `
     <div class="card" style="margin-bottom:8px">
       <div class="post-head" style="margin-bottom:4px">
-        <div class="post-avatar">${esc(r.who[0])}</div>
+        <div class="post-avatar">${esc((r.reviewer?.name || "?")[0])}</div>
         <div style="flex:1">
-          <div class="post-who">${esc(r.who)}</div>
-          <div class="post-time">${esc(r.time)}</div>
+          <div class="post-who">${esc(r.reviewer?.name || "Buyer")}</div>
+          <div class="post-time">${fmtRowTime(r.created_at)}</div>
         </div>
         <span class="mat-stars">${"★".repeat(r.stars)}${"☆".repeat(5 - r.stars)}</span>
       </div>
-      <p class="post-body">${esc(r.text)}</p>
+      <p class="post-body">${esc(r.text || "")}</p>
     </div>`).join("");
+
+  const metaLine = prof && prof.level
+    ? `${esc(prof.dept)} · ${esc(prof.level)} · run by ${esc(prof.name)}`
+    : `run by ${esc((prof && prof.name) || "Vendor")}`;
 
   openModal(`
     ${modalHead("Shop")}
     <div class="shop-hero">
-      <div class="shop-hero-avatar">${esc(s.name[0])}</div>
-      <div class="trust-name" style="font-size:20px">${esc(s.name)} <span class="verified-badge">✅ Verified Student</span></div>
-      <div class="trust-meta">${esc(s.uni)} · ${esc(s.dept)} · ${esc(s.level)} · run by ${esc(s.owner)}</div>
-      <p class="detail-desc" style="margin-top:6px">${esc(s.desc)}</p>
+      <div class="shop-hero-avatar">${esc(biz.name[0])}</div>
+      <div class="trust-name" style="font-size:20px">${esc(biz.name)} ${biz.verified ? '<span class="verified-badge">✅ Verified</span>' : ""}</div>
+      <div class="trust-meta">${metaLine}</div>
+      <p class="detail-desc" style="margin-top:6px">${esc(biz.description || "")}</p>
       <div class="shop-hero-stats">
-        <div><b>⭐ ${avg.toFixed(1)}</b><span>${s.ratingCount} ratings</span></div>
-        <div><b>${s.sales}</b><span>completed sales</span></div>
-        <div><b id="folCount">${s.followers}</b><span>followers</span></div>
+        <div><b>⭐ ${avg.toFixed(1)}</b><span>${(reviews || []).length} ratings</span></div>
+        <div><b>${salesCount || 0}</b><span>completed sales</span></div>
+        <div><b id="folCount">${followerCount || 0}</b><span>followers</span></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn ${s.youFollow ? "btn-ghost" : "btn-accent"}" style="flex:1" id="folBtn">${s.youFollow ? "Following ✓" : "＋ Follow"}</button>
+        <button class="btn ${youFollow ? "btn-ghost" : "btn-accent"}" style="flex:1" id="folBtn">${youFollow ? "Following ✓" : "＋ Follow"}</button>
         <button class="btn btn-primary" style="flex:1" id="shopMsg">💬 Message</button>
       </div>
     </div>
-    <div class="set-group">Products (${products.length})</div>
+    <div class="set-group">Products (${shopListings.length})</div>
     <div class="grid" style="grid-template-columns:repeat(2,1fr)">${prodGrid || `<div class="empty">No products listed yet</div>`}</div>
-    <div class="set-group">Reviews (${s.reviews.length})</div>
-    ${reviews || `<div class="empty">No reviews yet</div>`}
+    <div class="set-group">Reviews (${(reviews || []).length})</div>
+    ${reviewRows || `<div class="empty">No reviews yet</div>`}
   `, true);
 
-  $("#folBtn").addEventListener("click", () => {
-    s.youFollow = !s.youFollow;
-    s.followers += s.youFollow ? 1 : -1;
-    $("#folCount").textContent = s.followers;
-    $("#folBtn").textContent = s.youFollow ? "Following ✓" : "＋ Follow";
-    $("#folBtn").className = "btn " + (s.youFollow ? "btn-ghost" : "btn-accent");
-    toast(s.youFollow ? "Following " + s.name + " 🔔" : "Unfollowed " + s.name);
+  $("#folBtn").addEventListener("click", async () => {
+    const btn = $("#folBtn");
+    btn.disabled = true;
+    if (youFollow) {
+      const { error } = await sbUnfollowShop(biz.id, state.user.id);
+      if (error) { btn.disabled = false; return toast("Couldn't unfollow: " + error.message); }
+      youFollow = false;
+    } else {
+      const { error } = await sbFollowShop(biz.id, state.user.id);
+      if (error) { btn.disabled = false; return toast("Couldn't follow: " + error.message); }
+      youFollow = true;
+    }
+    $("#folCount").textContent = (Number($("#folCount").textContent) || 0) + (youFollow ? 1 : -1);
+    btn.textContent = youFollow ? "Following ✓" : "＋ Follow";
+    btn.className = "btn " + (youFollow ? "btn-ghost" : "btn-accent");
+    btn.disabled = false;
+    toast(youFollow ? "Following " + biz.name + " 🔔" : "Unfollowed " + biz.name);
   });
-  $("#shopMsg").addEventListener("click", () => openChat(s.name));
+  $("#shopMsg").addEventListener("click", () => openChat(biz.name));
   document.querySelectorAll("[data-shop-item]").forEach((b) =>
-    b.addEventListener("click", () => showItem(Number(b.dataset.shopItem))));
+    b.addEventListener("click", () => showItem(b.dataset.shopItem)));
 }
 
 /* --- sell form --- */
@@ -1960,17 +2038,25 @@ function showSell() {
     <button class="btn btn-primary btn-block" id="sellGo">Post to market</button>
   `);
   bindUpload((data) => { photo = data; });
-  $("#sellGo").addEventListener("click", () => {
+  $("#sellGo").addEventListener("click", async () => {
     const title = $("#sellTitle").value.trim();
     const price = Number($("#sellPrice").value);
     if (!title || !price) return toast("Add a title and price first");
+    const sellGo = $("#sellGo");
+    sellGo.disabled = true; sellGo.textContent = "Posting…";
+    const { data, error } = await sbInsertListing({
+      seller_id: state.user.id,
+      title, price,
+      category: $("#sellCat").value,
+      location: $("#sellLoc").value.trim() || "Campus",
+      description: $("#sellDesc").value.trim(),
+      image_url: photo || img("photo-1553062407-98eeb64c6a62"),
+    });
+    if (error) { sellGo.disabled = false; sellGo.textContent = "Post to market"; return toast("Couldn't post listing: " + error.message); }
     state.listings.unshift({
-      id: Date.now(), title, price,
-      cat: $("#sellCat").value,
-      loc: $("#sellLoc").value.trim() || "Campus",
-      desc: $("#sellDesc").value.trim(),
-      seller: "You",
-      img: photo || img("photo-1553062407-98eeb64c6a62"),
+      id: data.id, title: data.title, price: data.price, cat: data.category,
+      loc: data.location, desc: data.description, img: data.image_url,
+      seller: state.user.name, sellerId: data.seller_id, productId: data.product_id,
     });
     closeModal(); render(); toast("Your item is live! 🎉");
   });
@@ -1994,22 +2080,31 @@ function showListProduct(productId) {
     <button class="btn btn-primary btn-block" id="lpGo">List on market</button>
   `);
   bindUpload((data) => { photo = data; });
-  $("#lpGo").addEventListener("click", () => {
+  $("#lpGo").addEventListener("click", async () => {
     const title = $("#lpTitle").value.trim();
     const price = Number($("#lpPrice").value);
     if (!title || !price) return toast("Add a title and price first");
-    const listing = {
-      id: Date.now(), title, price,
-      cat: $("#lpCat").value,
-      loc: $("#lpLoc").value.trim() || "Campus",
-      desc: $("#lpDesc").value.trim(),
-      seller: (state.user.business && state.user.business.name) || "You",
-      productId: p.id,
-      img: photo || img("photo-1553062407-98eeb64c6a62"),
-    };
-    state.listings.unshift(listing);
+    const lpGo = $("#lpGo");
+    lpGo.disabled = true; lpGo.textContent = "Listing…";
+    const { data, error } = await sbInsertListing({
+      seller_id: state.user.id,
+      product_id: p.id,
+      title, price,
+      category: $("#lpCat").value,
+      location: $("#lpLoc").value.trim() || "Campus",
+      description: $("#lpDesc").value.trim(),
+      image_url: photo || img("photo-1553062407-98eeb64c6a62"),
+    });
+    if (error) { lpGo.disabled = false; lpGo.textContent = "List on market"; return toast("Couldn't list product: " + error.message); }
+    const { error: updErr } = await sbUpdateProduct(p.id, { listed: true });
+    if (updErr) console.error("Listing created but failed to flag product as listed:", updErr.message);
+    state.listings.unshift({
+      id: data.id, title: data.title, price: data.price, cat: data.category,
+      loc: data.location, desc: data.description, img: data.image_url,
+      seller: (state.user.business && state.user.business.name) || state.user.name,
+      sellerId: data.seller_id, productId: data.product_id,
+    });
     p.listed = true;
-    p.listingId = listing.id;
     closeModal(); render(); toast("Added to marketplace! 🎉");
   });
 }
@@ -2410,15 +2505,23 @@ function showSale() {
     <input id="saleQty" class="input" type="number" min="1" value="1" placeholder="Quantity" />
     <button class="btn btn-primary btn-block" id="saleGo">Save sale</button>
   `);
-  $("#saleGo").addEventListener("click", () => {
-    const p = state.products.find((x) => x.id === Number($("#salePid").value));
+  $("#saleGo").addEventListener("click", async () => {
+    const p = state.products.find((x) => x.id === $("#salePid").value);
     const qty = Number($("#saleQty").value);
     if (!p || qty < 1 || p.stock < qty) return toast("Not enough stock for that");
-    p.stock -= qty;
-    state.sales.unshift({
-      id: Date.now(), name: p.name, qty,
-      total: p.price * qty, profit: (p.price - p.cost) * qty, time: timeNow(),
+    const saleGo = $("#saleGo");
+    saleGo.disabled = true; saleGo.textContent = "Saving…";
+    const newStock = p.stock - qty;
+    const { error: stockErr } = await sbUpdateProduct(p.id, { stock: newStock });
+    if (stockErr) { saleGo.disabled = false; saleGo.textContent = "Save sale"; return toast("Couldn't update stock: " + stockErr.message); }
+    const total = p.price * qty, profit = (p.price - p.cost) * qty;
+    const { data, error } = await sbInsertSale({
+      shop_id: state.user.business.id, product_id: p.id, qty,
+      unit_price: p.price, unit_cost: p.cost, total, profit,
     });
+    if (error) { closeModal(); render(); return toast("Stock updated, but couldn't record the sale: " + error.message); }
+    p.stock = newStock;
+    state.sales.unshift({ id: data.id, name: p.name, qty, total, profit, time: fmtRowTime(data.created_at) });
     closeModal(); render(); toast("Sale recorded");
   });
 }
@@ -2436,16 +2539,20 @@ function showProduct() {
     <button class="btn btn-primary btn-block" id="pGo">Add to shop</button>
   `);
   bindUpload((data) => { photo = data; });
-  $("#pGo").addEventListener("click", () => {
+  $("#pGo").addEventListener("click", async () => {
     const name = $("#pName").value.trim();
     const price = Number($("#pPrice").value);
     if (!name || !price) return toast("Product needs a name and price");
-    state.products.push({
-      id: Date.now(), name, price,
+    const pGo = $("#pGo");
+    pGo.disabled = true; pGo.textContent = "Adding…";
+    const { data, error } = await sbInsertProduct({
+      shop_id: state.user.business.id, name, price,
       cost: Number($("#pCost").value) || 0,
       stock: Number($("#pStock").value) || 0,
-      img: photo,
+      image_url: photo,
     });
+    if (error) { pGo.disabled = false; pGo.textContent = "Add to shop"; return toast("Couldn't add product: " + error.message); }
+    state.products.push(mapProductRow(data));
     closeModal(); render(); toast("Product added to your shop");
   });
 }
@@ -2522,7 +2629,7 @@ function bindScreenEvents() {
   document.querySelectorAll("[data-cat]").forEach((b) =>
     b.addEventListener("click", () => { state.cat = b.dataset.cat; render(); }));
   document.querySelectorAll("[data-item]").forEach((b) =>
-    b.addEventListener("click", () => showItem(Number(b.dataset.item))));
+    b.addEventListener("click", () => showItem(b.dataset.item)));
   const sellBtn = document.querySelector('[data-act="open-sell"]');
   if (sellBtn) sellBtn.addEventListener("click", showSell);
 
@@ -2538,31 +2645,40 @@ function bindScreenEvents() {
   const prodBtn = document.querySelector('[data-act="open-product"]');
   if (prodBtn) prodBtn.addEventListener("click", showProduct);
   document.querySelectorAll("[data-list-product]").forEach((b) =>
-    b.addEventListener("click", () => showListProduct(Number(b.dataset.listProduct))));
+    b.addEventListener("click", () => showListProduct(b.dataset.listProduct)));
   document.querySelectorAll("[data-unlist-product]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const id = Number(b.dataset.unlistProduct);
+    b.addEventListener("click", async () => {
+      const id = b.dataset.unlistProduct;
       const p = state.products.find((x) => x.id === id);
       if (!p) return;
-      state.listings = state.listings.filter((l) => l.id !== p.listingId);
+      const { error } = await sbDeleteListingsByProduct(id);
+      if (error) return toast("Couldn't remove listing: " + error.message);
+      await sbUpdateProduct(id, { listed: false });
+      state.listings = state.listings.filter((l) => l.productId !== id);
       p.listed = false;
-      p.listingId = null;
       render(); toast("Removed from marketplace");
     }));
 
   // orders: complete → records the sale, updates stock and trust stats
   document.querySelectorAll("[data-complete]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const o = state.myShop.orders.find((x) => x.id === Number(b.dataset.complete));
+    b.addEventListener("click", async () => {
+      const id = b.dataset.complete;
+      const o = state.myShop.orders.find((x) => x.id === id);
       const p = state.products.find((x) => x.id === o.pid);
       if (!p || p.stock < o.qty) return toast("Not enough stock to complete this order");
-      p.stock -= o.qty;
-      o.status = "completed";
-      state.myShop.completedSales++;
-      state.sales.unshift({
-        id: Date.now(), name: p.name, qty: o.qty,
-        total: p.price * o.qty, profit: (p.price - p.cost) * o.qty, time: timeNow(),
+      const newStock = p.stock - o.qty;
+      const { error: stockErr } = await sbUpdateProduct(p.id, { stock: newStock });
+      if (stockErr) return toast("Couldn't update stock: " + stockErr.message);
+      const { error: orderErr } = await sbCompleteOrder(o.id);
+      if (orderErr) return toast("Couldn't complete order: " + orderErr.message);
+      const total = p.price * o.qty, profit = (p.price - p.cost) * o.qty;
+      const { data, error: saleErr } = await sbInsertSale({
+        shop_id: state.user.business.id, product_id: p.id, qty: o.qty,
+        unit_price: p.price, unit_cost: p.cost, total, profit,
       });
+      p.stock = newStock;
+      o.status = "completed";
+      if (!saleErr) state.sales.unshift({ id: data.id, name: p.name, qty: o.qty, total, profit, time: fmtRowTime(data.created_at) });
       render(); toast("Order completed — sale recorded ✅");
     }));
   document.querySelectorAll("[data-chat-buyer]").forEach((b) =>
@@ -2610,6 +2726,9 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
         businessRow = biz;
       }
       hydrateUser(profileRow, businessRow, "session");
+      render();
+      await hydrateMarketplace();
+      return;
     }
   }
   render();
