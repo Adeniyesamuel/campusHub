@@ -229,11 +229,11 @@ function render() {
   if (!state.user) {
     document.body.classList.add("unauthed");
     let screen;
-    if (!state.authRole) screen = roleScreen();
-    else if (state.authStage === "vtype") screen = vtypeScreen();
+    if (state.authStage === "vtype") screen = vtypeScreen();
     else if (state.authStage === "vverify") screen = vverifyScreen();
     else if (state.authStage === "profile") screen = profileScreen();
-    else screen = authScreen();
+    else if (state.authStage === "auth") screen = authScreen();
+    else screen = roleScreen();
     $("#content").innerHTML = screen;
     bindAuthEvents();
     return;
@@ -284,6 +284,10 @@ function roleScreen() {
           </button>
         </div>
         <p class="auth-terms">You can switch or upgrade to a vendor account any time.</p>
+        <p class="auth-switch">
+          Already have an account?
+          <button data-act="goto-login">Log in</button>
+        </p>
       </div>
     </div>`;
 }
@@ -463,7 +467,7 @@ function authScreen() {
           <div class="wordmark">Campus<span>Hub.</span></div>
         </div>
         <div class="auth-title">Welcome back</div>
-        <p class="auth-sub">Log in to your ${roleLabel} account.</p>
+        <p class="auth-sub">Log in to CampusHub.</p>
 
         <input id="authId" class="auth-input" placeholder="Email or phone number" autocomplete="username" />
         <button class="continue-btn" id="authContinue" disabled>Continue</button>
@@ -476,20 +480,27 @@ function authScreen() {
     </div>`;
 }
 
-function completeAuth(via) {
-  // demo login has no database, so give logins a sample profile if none picked
-  const lvl = state.profile.level || "100 Level";
-  const dpt = state.profile.dept || "Computer Science";
-  const academic = state.authRole === "student" || state.vendorType === "student";
+/* turns a DB profiles row (+ optional businesses row) into state.user and
+   resets the post-login UI — shared by signup, login, and session restore */
+function hydrateUser(profileRow, businessRow, via) {
   state.user = {
-    role: state.authRole,
+    role: profileRow.role,
     via,
-    vendorType: state.authRole === "vendor" ? (state.vendorType || "external") : null,
-    name: state.profile.name || (state.authRole === "vendor" && state.vendorType === "external" ? state.business.name : "") || "Demo User",
-    matric: academic ? (state.profile.matric || "210000000") : null,
-    level: academic ? lvl : null,
-    dept: academic ? dpt : null,
-    business: state.authRole === "vendor" ? { ...state.business } : null,
+    vendorType: profileRow.vendor_type,
+    name: profileRow.name,
+    matric: profileRow.matric,
+    level: profileRow.level,
+    dept: profileRow.dept,
+    business: businessRow ? {
+      name: businessRow.name,
+      cat: businessRow.category,
+      desc: businessRow.description,
+      phone: businessRow.phone,
+      loc: businessRow.location,
+      social: businessRow.social_handle,
+      cac: businessRow.cac_number,
+      verified: businessRow.verified,
+    } : null,
   };
   // avatar shows the user's initial
   document.querySelectorAll(".avatar").forEach((a) => {
@@ -500,11 +511,67 @@ function completeAuth(via) {
   state.authStep = "start";
   state.authStage = null;
   state.authId = "";
+}
+
+async function completeAuth(via) {
+  const email = state.authId;
+  const password = $("#authPw") ? $("#authPw").value : "";
+  const pwGo = $("#pwContinue");
+  const busy = (label) => { if (pwGo) { pwGo.disabled = true; pwGo.textContent = label; } };
+  const failed = (label, message) => { if (pwGo) { pwGo.disabled = false; pwGo.textContent = label; } toast(message); };
+
+  if (state.authMode === "signup") {
+    busy("Creating account…");
+    const { data, error } = await sbSignUp(email, password);
+    if (error) return failed("Create account", error.message);
+
+    const userId = data.user.id;
+    const academic = state.authRole === "student" || state.vendorType === "student";
+    const profileRow = {
+      id: userId,
+      role: state.authRole,
+      vendor_type: state.authRole === "vendor" ? (state.vendorType || "external") : null,
+      name: state.profile.name || (state.authRole === "vendor" && state.vendorType === "external" ? state.business.name : "") || "CampusHub User",
+      matric: academic ? (state.profile.matric || null) : null,
+      level: academic ? (state.profile.level || null) : null,
+      dept: academic ? (state.profile.dept || null) : null,
+    };
+    const { error: profileErr } = await sbInsertProfile(profileRow);
+    if (profileErr) return failed("Create account", "Couldn't save your profile: " + profileErr.message);
+
+    let businessRow = null;
+    if (state.authRole === "vendor") {
+      const b = state.business;
+      const { data: biz, error: bizErr } = await sbInsertBusiness({
+        owner_id: userId, name: b.name, category: b.cat, description: b.desc,
+        phone: b.phone, location: b.loc, social_handle: b.social, cac_number: b.cac,
+      });
+      if (bizErr) return failed("Create account", "Couldn't save your business info: " + bizErr.message);
+      businessRow = biz;
+    }
+    hydrateUser(profileRow, businessRow, via);
+  } else {
+    busy("Logging in…");
+    const { data, error } = await sbSignIn(email, password);
+    if (error) return failed("Log in", error.message);
+
+    const userId = data.user.id;
+    const { data: profileRow, error: profileErr } = await sbGetProfile(userId);
+    if (profileErr || !profileRow) return failed("Log in", "We couldn't find your profile — please contact support.");
+
+    let businessRow = null;
+    if (profileRow.role === "vendor") {
+      const { data: biz } = await sbGetBusiness(userId);
+      businessRow = biz;
+    }
+    hydrateUser(profileRow, businessRow, via);
+  }
+
   render();
   const who = state.user.role === "vendor"
     ? (state.user.vendorType === "student" ? "a student vendor" : "a campus vendor")
     : "a student";
-  toast((state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who + " (demo)");
+  toast((state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who);
 }
 
 function bindAuthEvents() {
@@ -555,6 +622,16 @@ function bindAuthEvents() {
   }
   const vvBack = document.querySelector('[data-act="vv-back"]');
   if (vvBack) vvBack.addEventListener("click", () => { state.authStage = "vtype"; render(); });
+
+  // role picker's "Log in" link jumps straight to the login screen —
+  // no role/business/profile questions, since that's looked up from the account
+  const gotoLogin = document.querySelector('[data-act="goto-login"]');
+  if (gotoLogin) gotoLogin.addEventListener("click", () => {
+    state.authMode = "login";
+    state.authStage = "auth";
+    state.authStep = "start";
+    render();
+  });
 
   // back to role picker (from vendor type or auth screens)
   const back = document.querySelector('[data-act="auth-back"]');
@@ -623,9 +700,9 @@ function bindAuthEvents() {
     render();
   });
 
-  // social / phone buttons (demo — real build connects Google, Apple & SMS OTP)
+  // social / phone buttons — not wired up yet, coming in a later pass
   document.querySelectorAll("[data-auth]").forEach((b) =>
-    b.addEventListener("click", () => completeAuth(b.dataset.auth)));
+    b.addEventListener("click", () => toast("Coming soon — use email for now")));
 
   // email / phone → password step
   const idInput = $("#authId");
@@ -1545,11 +1622,12 @@ function showSettings() {
     notif = !notif;
     $("#notifState").textContent = notif ? "On" : "Off";
   });
-  $("#setLogout").addEventListener("click", () => {
+  $("#setLogout").addEventListener("click", async () => {
     closeModal();
+    await sbSignOut();
     state.user = null; state.authRole = null; state.authMode = "signup";
     state.authStage = null; state.vendorType = null;
-    state.profile = { level: "", dept: "" }; state.feedFilter = "All";
+    state.profile = { name: "", matric: "", level: "", dept: "" }; state.feedFilter = "All";
     render();
   });
 }
@@ -2520,5 +2598,19 @@ document.querySelectorAll('[data-act="open-settings"]').forEach((b) =>
 /* restore saved theme */
 try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.add("dark"); } catch (e) { /* private mode */ }
 
-/* first paint */
-render();
+/* first paint: restore an existing Supabase session before showing the auth flow */
+(async function boot() {
+  const session = await sbGetSession();
+  if (session) {
+    const { data: profileRow } = await sbGetProfile(session.user.id);
+    if (profileRow) {
+      let businessRow = null;
+      if (profileRow.role === "vendor") {
+        const { data: biz } = await sbGetBusiness(session.user.id);
+        businessRow = biz;
+      }
+      hydrateUser(profileRow, businessRow, "session");
+    }
+  }
+  render();
+})();
