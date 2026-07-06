@@ -254,6 +254,8 @@ textarea.input { resize: vertical; }
 .ticket-event { font-weight: 800; margin-top: 4px; }
 .ticket-meta { font-size: 12px; color: var(--indigo-300); margin-top: 3px; }
 .ticket-code { font-family: "Courier New", monospace; font-size: 19px; letter-spacing: 3px; color: var(--orange-300); margin-top: 8px; }
+.ticket-qr { background: #fff; border-radius: 8px; padding: 8px; display: inline-block; margin-top: 10px; }
+.ticket-qr svg { display: block; width: 96px; height: 96px; }
 
 /* ---------- Vendor shop ---------- */
 .profit-card {

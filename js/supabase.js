@@ -9,6 +9,7 @@
 
 const SUPABASE_URL = "https://tiqubxxtthtbbivwfdvz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_owMigWTOBc4lR4c6nJSBlA_USCirao5";
+const PAYSTACK_PUBLIC_KEY = "pk_test_23fcfd1f380db72bb577e1584eb64fde3dc31c33";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -54,3 +55,15 @@ const sbCompleteOrder = (orderId) => sb.from("orders").update({ status: "complet
 const sbGetSales = (shopId) => sb.from("sales").select().eq("shop_id", shopId).order("created_at", { ascending: false });
 const sbInsertSale = (row) => sb.from("sales").insert(row).select().single();
 const sbGetPublicSalesCount = (shopId) => sb.rpc("get_shop_sales_count", { target_shop_id: shopId });
+
+/* ---------- events + tickets ---------- */
+const sbGetEvents = () => sb.from("events").select("*, ticket_tiers(*)").order("created_at", { ascending: false });
+const sbInsertEvent = (row) => sb.from("events").insert(row).select().single();
+const sbInsertTicketTiers = (rows) => sb.from("ticket_tiers").insert(rows).select();
+const sbGetTierSoldCounts = () => sb.rpc("get_tier_sold_counts");
+const sbGetMyTickets = (buyerId) =>
+  sb.from("tickets").select("id, qty, total, code, used_at, ticket_tiers(name, price, events(title))").eq("buyer_id", buyerId).eq("status", "paid").order("created_at", { ascending: false });
+const sbInsertTickets = (rows) => sb.from("tickets").insert(rows).select();
+const sbConfirmTicket = (ticketIds, reference) =>
+  sb.functions.invoke("confirm-ticket", { body: { ticket_ids: ticketIds, reference } });
+const sbScanTicket = (code) => sb.functions.invoke("scan-ticket", { body: { code } });

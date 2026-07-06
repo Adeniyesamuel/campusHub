@@ -35,36 +35,8 @@ const state = {
   query: "",
   listings: [], // loaded from Supabase after login — see hydrateMarketplace()
   cats: ["All", "Electronics", "Books", "Hostel Items", "Fashion & Beauty", "Food", "Services"],
-  events: [
-    {
-      id: 1, title: "Faculty of Science Dinner Night", date: "Sat, 18 Jul", time: "6:00 PM",
-      venue: "Multipurpose Hall", tag: "Dinner", img: img("photo-1414235077428-338989a2e8c0"),
-      organizer: "Faculty of Science SA",
-      tiers: [
-        { id: 1, name: "Early Bird", price: 2000, desc: "Discounted early access — limited quantity.", left: 0 },
-        { id: 2, name: "Regular", price: 3000, desc: "Full dinner access: three-course meal, live band and awards night.", left: 42 },
-        { id: 3, name: "VIP Table", price: 10000, desc: "Front table seating for you and a guest, priority serving and a photo session.", left: 8 },
-      ],
-    },
-    {
-      id: 2, title: "Tech Club: Intro to AI Workshop", date: "Wed, 22 Jul", time: "10:00 AM",
-      venue: "CITS Auditorium", tag: "Workshop", img: img("photo-1517245386807-bb43f82c33c4"),
-      organizer: "UNILAG Tech Club",
-      tiers: [
-        { id: 1, name: "General Admission", price: 0, desc: "Free entry. Bring your laptop — hands-on session with real AI tools.", left: 120 },
-      ],
-    },
-    {
-      id: 3, title: "Freshers' Welcome Jam", date: "Fri, 31 Jul", time: "7:00 PM",
-      venue: "Sports Centre Field", tag: "Party", img: img("photo-1501281668745-f7f57925c3b4"),
-      organizer: "Student Union",
-      tiers: [
-        { id: 1, name: "Regular", price: 1500, desc: "General entry to the biggest welcome party of the year.", left: 260 },
-        { id: 2, name: "VIP", price: 5000, desc: "VIP section access, free drink and fast-track entry.", left: 30 },
-      ],
-    },
-  ],
-  tickets: [],
+  events: [], // loaded from Supabase after login — see hydrateEvents()
+  tickets: [], // the logged-in user's own paid tickets — see hydrateEvents()
   feed: [
     { id: 1, who: "Student Affairs", tag: "Official", aud: "General", time: "9:12 AM", text: "GST exam timetable has been revised. New timetable is now on departmental notice boards. Check before Friday." },
     { id: 2, who: "CSC Class Rep", tag: "Class", aud: "Computer Science", time: "8:40 AM", text: "CSC 201 lecture moved from LT2 to CITS Hall for today only. 12pm sharp." },
@@ -521,6 +493,45 @@ async function hydrateMarketplace() {
   render();
 }
 
+/* loads the public events feed (with computed tier availability) for
+   everyone, plus the logged-in user's own paid tickets */
+async function hydrateEvents() {
+  const { data: eventRows } = await sbGetEvents();
+  const { data: soldRows } = await sbGetTierSoldCounts();
+  const soldByTier = new Map((soldRows || []).map((r) => [r.tier_id, Number(r.sold)]));
+
+  state.events = (eventRows || []).map((ev) => ({
+    id: ev.id,
+    title: ev.title,
+    date: ev.date,
+    time: ev.time,
+    venue: ev.venue,
+    tag: ev.tag,
+    img: ev.image_url,
+    organizer: ev.organizer_name,
+    tiers: (ev.ticket_tiers || []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      price: t.price,
+      desc: t.description,
+      left: Math.max(0, t.quantity_total - (soldByTier.get(t.id) || 0)),
+    })),
+  }));
+
+  const { data: ticketRows } = await sbGetMyTickets(state.user.id);
+  state.tickets = (ticketRows || []).map((t) => ({
+    id: t.id,
+    event: t.ticket_tiers?.events?.title || "Event",
+    tier: t.ticket_tiers?.name || "Ticket",
+    qty: t.qty,
+    total: t.total,
+    code: t.code,
+    usedAt: t.used_at,
+  }));
+
+  render();
+}
+
 async function completeAuth(via) {
   const email = state.authId;
   const password = $("#authPw") ? $("#authPw").value : "";
@@ -581,6 +592,7 @@ async function completeAuth(via) {
     : "a student";
   toast((state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who);
   await hydrateMarketplace();
+  await hydrateEvents();
 }
 
 function bindAuthEvents() {
@@ -924,6 +936,14 @@ function marketScreen() {
 /* ---------- EVENTS ---------- */
 const eventFee = (price) => (price > 0 ? Math.round(price * 0.09) : 0); // 9% platform fee
 
+/* small QR code as an inline SVG string, for ticket codes */
+const qrSvg = (text) => {
+  const qr = qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  return qr.createSvgTag(4, 4);
+};
+
 function eventsScreen() {
   const cards = state.events.map((ev) => {
     const open = ev.tiers.filter((t) => t.left > 0);
@@ -961,9 +981,10 @@ function eventsScreen() {
        <div class="events-grid">
        ${state.tickets.map((t) => `
         <div class="ticket">
-          <div class="ticket-label">CampusHub Ticket</div>
+          <div class="ticket-label">CampusHub Ticket ${t.usedAt ? '<span class="stock-pill stock-ok" style="margin-left:8px">Used ✅</span>' : ""}</div>
           <div class="ticket-event">${esc(t.event)}</div>
           <div class="ticket-meta">${t.qty} × ${esc(t.tier)} · ${t.total === 0 ? "Free" : naira(t.total)}</div>
+          <div class="ticket-qr">${qrSvg(t.code)}</div>
           <div class="ticket-code">${esc(t.code)}</div>
         </div>`).join("")}
        </div>`
@@ -975,7 +996,10 @@ function eventsScreen() {
         <div class="eyebrow">Events &amp; tickets</div>
         <h1 class="h1">Don't miss out</h1>
       </div>
-      <button class="btn btn-accent btn-sm" data-act="open-host">＋ Host event</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" data-act="open-scan">🔍 Scan tickets</button>
+        <button class="btn btn-accent btn-sm" data-act="open-host">＋ Host event</button>
+      </div>
     </div>
     <div class="events-grid">${cards}</div>
     ${myTickets}`;
@@ -2228,7 +2252,7 @@ function renderCheckout(co) {
 
     document.querySelectorAll("[data-tier]").forEach((sel) =>
       sel.addEventListener("change", () => {
-        co.qty[Number(sel.dataset.tier)] = Number(sel.value);
+        co.qty[sel.dataset.tier] = Number(sel.value);
         renderCheckout(co);
       }));
     $("#coNext").addEventListener("click", () => {
@@ -2313,7 +2337,7 @@ function renderCheckout(co) {
           <div class="pay-sub">${free
             ? "This event is free — no payment needed. 🎉"
             : "Total for " + t.count + " ticket" + (t.count > 1 ? "s" : "") + ", fees included."}</div>
-          ${free ? "" : `<div class="pay-method">💳 Pay securely with Paystack <span style="margin-left:auto;font-size:11px;color:var(--muted)">demo</span></div>`}
+          ${free ? "" : `<div class="pay-method">💳 Pay securely with Paystack</div>`}
         </div>
         <p class="form-hint">Ticket${t.count > 1 ? "s" : ""} will be sent to <b>${esc(co.contact.email)}</b>${free ? "." : " after payment."}</p>
       </div>
@@ -2321,33 +2345,181 @@ function renderCheckout(co) {
     </div>
   `, true);
 
-  $("#coPay").addEventListener("click", () => {
-    // issue tickets + reduce availability
+  const payLabel = free ? "Get free tickets" : "Pay " + naira(t.subtotal);
+  $("#coPay").addEventListener("click", async () => {
+    const payBtn = $("#coPay");
+    payBtn.disabled = true; payBtn.textContent = free ? "Reserving…" : "Processing…";
+
+    // reserve one pending ticket row per tier the buyer selected
+    const rows = [];
     co.ev.tiers.forEach((tier) => {
       const q = co.qty[tier.id] || 0;
       if (q > 0) {
-        tier.left -= q;
         const fee = eventFee(tier.price) * q;
-        state.tickets.unshift({
-          id: Date.now() + tier.id,
-          event: co.ev.title,
-          tier: tier.name,
-          qty: q,
+        rows.push({
+          tier_id: tier.id, buyer_id: state.user.id, qty: q,
           total: tier.price * q + fee,
           code: "CH-" + Math.random().toString(36).slice(2, 8).toUpperCase(),
+          status: "pending",
         });
       }
     });
-    clearInterval(checkoutTimer);
-    closeModal();
-    render();
-    toast(free ? "You're in! Tickets saved 🎉" : "Payment successful — tickets saved 🎉");
+    if (!rows.length) { payBtn.disabled = false; payBtn.textContent = payLabel; return; }
+
+    const { data: reserved, error: reserveErr } = await sbInsertTickets(rows);
+    if (reserveErr) {
+      payBtn.disabled = false; payBtn.textContent = payLabel;
+      return toast("Couldn't reserve tickets: " + reserveErr.message);
+    }
+    const ticketIds = reserved.map((r) => r.id);
+
+    const finish = async (reference) => {
+      const { data: confirmData, error: confirmErr } = await sbConfirmTicket(ticketIds, reference);
+      if (confirmErr || !confirmData || confirmData.error) {
+        // supabase-js only puts a generic "non-2xx status code" message on
+        // confirmErr — the actual reason (e.g. "sold out, refunded") is in
+        // the response body, which has to be parsed from confirmErr.context
+        let msg = confirmData && confirmData.error;
+        if (!msg && confirmErr) {
+          msg = confirmErr.message;
+          try {
+            const body = await confirmErr.context.json();
+            if (body && body.error) msg = body.error;
+          } catch (e) { /* fall back to confirmErr.message */ }
+        }
+        payBtn.disabled = false; payBtn.textContent = payLabel;
+        return toast(msg || "Something went wrong confirming your tickets.");
+      }
+      clearInterval(checkoutTimer);
+      closeModal();
+      toast(free ? "You're in! Tickets saved 🎉" : "Payment successful — tickets saved 🎉");
+      await hydrateEvents();
+    };
+
+    if (free) {
+      await finish(undefined);
+      return;
+    }
+
+    const handler = PaystackPop.setup({
+      key: PAYSTACK_PUBLIC_KEY,
+      email: co.contact.email,
+      amount: t.subtotal * 100, // Paystack takes kobo
+      currency: "NGN",
+      metadata: { event: co.ev.title, ticket_count: t.count },
+      callback: (response) => { finish(response.reference); },
+      onClose: () => {
+        payBtn.disabled = false; payBtn.textContent = payLabel;
+        toast("Payment cancelled");
+      },
+    });
+    handler.openIframe();
   });
 }
 
 /* ==========================================================
    HOST AN EVENT  (organizer info → event details → tickets)
    ========================================================== */
+
+/* --- organizer check-in: verify a ticket code and mark it used --- */
+function showScanTicket() {
+  openModal(`
+    ${modalHead("Scan tickets")}
+    <p class="host-note">Enter or scan a ticket code to check a guest in. Each ticket can only be used once.</p>
+    <input id="scanCode" class="input" placeholder="Ticket code (e.g. CH-AB12CD)" autocomplete="off" style="text-transform:uppercase" />
+    <button class="btn btn-primary btn-block" id="scanGo">Verify</button>
+    <button class="btn btn-ghost btn-block" id="scanCamBtn" style="margin-top:8px">📷 Scan with camera</button>
+    <div id="scanCamWrap" class="hidden" style="margin-top:10px">
+      <video id="scanVideo" style="width:100%;border-radius:12px;background:#000" playsinline muted></video>
+    </div>
+    <div id="scanResult" style="margin-top:14px"></div>
+  `);
+
+  const renderResult = (html) => { $("#scanResult").innerHTML = html; };
+
+  const verify = async (code) => {
+    if (!code || !code.trim()) return;
+    const scanGo = $("#scanGo");
+    scanGo.disabled = true;
+    const { data, error } = await sbScanTicket(code.trim());
+    scanGo.disabled = false;
+    if (error) {
+      renderResult(`<div class="trust-card"><div class="trust-name">❌ ${esc(error.message || "Couldn't verify this code")}</div></div>`);
+      return;
+    }
+    if (data.error) {
+      renderResult(`<div class="trust-card"><div class="trust-name">❌ ${esc(data.error)}</div></div>`);
+      return;
+    }
+    if (!data.valid) {
+      const reasonText = {
+        not_found: "Ticket code not found.",
+        not_paid: "This ticket was never paid for.",
+        already_used: "Already used at " + new Date(data.used_at).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" }) + ".",
+      }[data.reason] || "This ticket isn't valid.";
+      renderResult(`
+        <div class="trust-card">
+          <div class="trust-name">❌ ${esc(reasonText)}</div>
+          ${data.buyer_name ? `<div class="trust-meta">${esc(data.buyer_name)} · ${esc(data.tier_name || "")} · ${esc(data.event_title || "")}</div>` : ""}
+        </div>`);
+      return;
+    }
+    renderResult(`
+      <div class="trust-card">
+        <div class="trust-name">✅ Valid entry — ${esc(data.buyer_name)}</div>
+        <div class="trust-meta">${data.qty} × ${esc(data.tier_name)} · ${esc(data.event_title)}</div>
+      </div>`);
+  };
+
+  $("#scanGo").addEventListener("click", () => verify($("#scanCode").value));
+  $("#scanCode").addEventListener("keydown", (e) => { if (e.key === "Enter") verify($("#scanCode").value); });
+
+  // optional camera scanning via the browser's native BarcodeDetector —
+  // manual code entry above always works regardless of browser support
+  let scanning = false, stream = null;
+  const stopCamera = () => {
+    scanning = false;
+    if (stream) { stream.getTracks().forEach((tr) => tr.stop()); stream = null; }
+  };
+  $("#scanCamBtn").addEventListener("click", async () => {
+    if (!("BarcodeDetector" in window)) {
+      return toast("Camera scanning isn't supported in this browser — enter the code manually");
+    }
+    const wrap = $("#scanCamWrap");
+    const video = $("#scanVideo");
+    if (scanning) { stopCamera(); wrap.classList.add("hidden"); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    } catch (e) {
+      return toast("Couldn't access the camera: " + e.message);
+    }
+    video.srcObject = stream;
+    await video.play();
+    wrap.classList.remove("hidden");
+    scanning = true;
+    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+    const loop = async () => {
+      if (!scanning) return;
+      try {
+        const codes = await detector.detect(video);
+        if (codes.length) {
+          stopCamera();
+          wrap.classList.add("hidden");
+          $("#scanCode").value = codes[0].rawValue;
+          verify(codes[0].rawValue);
+          return;
+        }
+      } catch (e) { /* keep trying next frame */ }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  });
+
+  // stop the camera if the modal is closed mid-scan
+  const overlay = $("#overlay");
+  if (overlay) overlay.addEventListener("click", (e) => { if (e.target.id === "overlay") stopCamera(); });
+  document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", stopCamera));
+}
 
 function openHost() {
   const h = {
@@ -2473,25 +2645,33 @@ function renderHost(h) {
   $("#addTier").addEventListener("click", () => {
     sync(); h.tiers.push({ name: "", price: "", qty: "" }); renderHost(h);
   });
-  $("#hPublish").addEventListener("click", () => {
+  $("#hPublish").addEventListener("click", async () => {
     sync();
     const valid = h.tiers.filter((t) => t.name.trim() && Number(t.qty) > 0);
     if (!valid.length) return toast("Add at least one ticket type with a name and quantity");
-    state.events.unshift({
-      id: Date.now(),
+    const publishBtn = $("#hPublish");
+    publishBtn.disabled = true; publishBtn.textContent = "Publishing…";
+
+    const { data: event, error: eventErr } = await sbInsertEvent({
+      organizer_id: state.user.id,
+      organizer_name: h.org.name, organizer_email: h.org.email, organizer_phone: h.org.phone,
       title: h.ev.title, date: h.ev.date, time: h.ev.time || "TBA",
-      venue: h.ev.venue, tag: h.ev.tag,
-      img: h.photo || img("photo-1492684223066-81342ee5ff30"),
-      organizer: h.org.name,
-      tiers: valid.map((t, i) => ({
-        id: i + 1, name: t.name.trim(),
-        price: Math.max(0, Number(t.price) || 0),
-        desc: h.ev.desc || "Hosted by " + h.org.name,
-        left: Number(t.qty),
-      })),
+      venue: h.ev.venue, tag: h.ev.tag, description: h.ev.desc,
+      image_url: h.photo || img("photo-1492684223066-81342ee5ff30"),
     });
-    closeModal(); render();
+    if (eventErr) { publishBtn.disabled = false; publishBtn.textContent = "Publish event"; return toast("Couldn't publish event: " + eventErr.message); }
+
+    const { error: tiersErr } = await sbInsertTicketTiers(valid.map((t) => ({
+      event_id: event.id, name: t.name.trim(),
+      price: Math.max(0, Number(t.price) || 0),
+      description: h.ev.desc || "Hosted by " + h.org.name,
+      quantity_total: Number(t.qty),
+    })));
+    if (tiersErr) { publishBtn.disabled = false; publishBtn.textContent = "Publish event"; return toast("Event created, but couldn't save ticket types: " + tiersErr.message); }
+
+    closeModal();
     toast("Event published! Students can now get tickets 🎉");
+    await hydrateEvents();
   });
 }
 
@@ -2635,9 +2815,11 @@ function bindScreenEvents() {
 
   // events
   document.querySelectorAll("[data-buy]").forEach((b) =>
-    b.addEventListener("click", () => openCheckout(Number(b.dataset.buy))));
+    b.addEventListener("click", () => openCheckout(b.dataset.buy)));
   const hostBtn = document.querySelector('[data-act="open-host"]');
   if (hostBtn) hostBtn.addEventListener("click", openHost);
+  const scanBtn = document.querySelector('[data-act="open-scan"]');
+  if (scanBtn) scanBtn.addEventListener("click", showScanTicket);
 
   // shop
   const saleBtn = document.querySelector('[data-act="open-sale"]');
@@ -2728,6 +2910,7 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       hydrateUser(profileRow, businessRow, "session");
       render();
       await hydrateMarketplace();
+      await hydrateEvents();
       return;
     }
   }
