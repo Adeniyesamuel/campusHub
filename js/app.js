@@ -54,6 +54,10 @@ const state = {
 
   /* ---- The logged-in vendor's own shop ---- */
   myShop: { followers: 0, reviews: [], orders: [] },
+  payoutAccount: null, // { business_name, bank_name, account_number, account_name } once set up
+  // sane defaults matching platform_fees seed data — overwritten by
+  // hydrateFees() as soon as we can reach the database
+  fees: { events: { percent: 5, min_fee: 0 }, marketplace: { percent: 2.5, min_fee: 100 } },
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
@@ -474,7 +478,8 @@ const mapProductRow = (row) => ({
 
 const mapOrderRow = (row) => ({
   id: row.id, pid: row.product_id, buyer: row.buyer?.name || "Buyer",
-  qty: row.qty, status: row.status, time: fmtRowTime(row.created_at),
+  qty: row.qty, status: row.status, paymentStatus: row.payment_status,
+  time: fmtRowTime(row.created_at),
 });
 
 const mapSaleRow = (row) => {
@@ -553,6 +558,24 @@ async function hydrateEvents() {
   render();
 }
 
+/* loads the configurable platform fee rates — public data, but no need
+   to fetch it before someone's actually logged in and looking at prices */
+async function hydrateFees() {
+  const { data } = await sbGetPlatformFees();
+  (data || []).forEach((row) => {
+    if (state.fees[row.key]) state.fees[row.key] = { percent: Number(row.percent), min_fee: row.min_fee };
+  });
+}
+
+/* loads the logged-in user's payout account status (vendor or event
+   organizer — same payout destination for both), if they've set one up */
+async function hydratePayoutAccount() {
+  const { data } = await sbGetPayoutAccount(state.user.id);
+  state.payoutAccount = data
+    ? { business_name: data.business_name, bank_name: data.bank_name, account_number: data.account_number, account_name: data.account_name }
+    : null;
+}
+
 async function completeAuth(via) {
   const email = state.authId;
   const password = $("#authPw") ? $("#authPw").value : "";
@@ -614,6 +637,8 @@ async function completeAuth(via) {
   toast((state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who);
   await hydrateMarketplace();
   await hydrateEvents();
+  await hydratePayoutAccount();
+  await hydrateFees();
 }
 
 function bindAuthEvents() {
@@ -955,7 +980,23 @@ function marketScreen() {
 }
 
 /* ---------- EVENTS ---------- */
-const eventFee = (price) => (price > 0 ? Math.round(price * 0.09) : 0); // 9% platform fee
+// platform fee rates are configurable (platform_fees table) — these read
+// the value hydrateFees() loaded, falling back to the seeded defaults in
+// state.fees until that's had a chance to run
+const eventFee = (price) =>
+  price > 0 ? Math.max(Math.round(price * (state.fees.events.percent / 100)), state.fees.events.min_fee) : 0;
+const marketplaceFee = (itemTotal) =>
+  Math.max(Math.round(itemTotal * (state.fees.marketplace.percent / 100)), state.fees.marketplace.min_fee);
+
+// mirrors the Paystack-fee gross-up math in the init-*-payment Edge
+// Functions, for a client-side estimate shown before checkout — the
+// authoritative total is always whatever the Edge Function returns
+const estimateGrossUpTotal = (base) => {
+  let total = Math.ceil((base + 100) / 0.985);
+  if (total < 2500) total = Math.ceil(base / 0.985);
+  const fee = total - base;
+  return fee > 2000 ? base + 2000 : total;
+};
 
 /* small QR code as an inline SVG string, for ticket codes */
 const qrSvg = (text) => {
@@ -1072,7 +1113,7 @@ function shopScreen() {
       <div class="card row-item">
         <div class="row-ico">${o.status === "new" ? "🛎️" : "✅"}</div>
         <div class="row-main">
-          <div class="row-title">${o.qty} × ${esc(p.name)}</div>
+          <div class="row-title">${o.qty} × ${esc(p.name)} ${o.paymentStatus === "paid" ? '<span class="stock-pill stock-ok" style="margin-left:6px">Paid</span>' : ""}</div>
           <div class="row-sub">from ${esc(o.buyer)} · ${esc(o.time)} · ${naira(p.price * o.qty)}</div>
         </div>
         ${o.status === "new"
@@ -1628,6 +1669,21 @@ function showSettings() {
       <button class="btn btn-primary btn-block" id="setSaveAcad">Save changes</button>
     </div>` : ""}
 
+    <div class="set-group">Payouts</div>
+    <div class="card">
+      ${state.payoutAccount ? `
+        <div class="row-sub" style="margin-bottom:10px">Sales and ticket money are sent automatically to:</div>
+        <div class="trust-card" style="margin:0 0 10px">
+          <div class="trust-name">${esc(state.payoutAccount.business_name)}</div>
+          <div class="trust-meta">${esc(state.payoutAccount.bank_name)} · ${esc(state.payoutAccount.account_number)} · ${esc(state.payoutAccount.account_name)}</div>
+        </div>
+        <button class="btn btn-ghost btn-block" id="setPayout">Update payout details</button>
+      ` : `
+        <p class="row-sub" style="margin-bottom:10px">Set up a payout account to sell on the marketplace or host paid events — your share is sent to your bank automatically after every sale.</p>
+        <button class="btn btn-accent btn-block" id="setPayout">🏦 Set up payouts</button>
+      `}
+    </div>
+
     <div class="set-group">Account</div>
     <div class="card" style="display:grid;gap:8px">
       <button class="btn btn-ghost" id="setPw">🔒 Change password</button>
@@ -1670,6 +1726,9 @@ function showSettings() {
     toast("Profile updated — feed and class info now follow " + u.dept);
   });
 
+  const payoutBtn = $("#setPayout");
+  if (payoutBtn) payoutBtn.addEventListener("click", () => { closeModal(); showPayoutForm(); });
+
   $("#setPw").addEventListener("click", () => toast("Password change comes with the real accounts system"));
   let notif = true;
   $("#setNotif").addEventListener("click", () => {
@@ -1683,6 +1742,54 @@ function showSettings() {
     state.authStage = null; state.vendorType = null;
     state.profile = { name: "", matric: "", level: "", dept: "" }; state.feedFilter = "All";
     render();
+  });
+}
+
+/* --- payout onboarding: bank details -> resolved + a Paystack subaccount --- */
+async function showPayoutForm() {
+  openModal(`
+    ${modalHead("Set up payouts")}
+    <p class="row-sub" style="margin-bottom:12px">We verify your account name with your bank before saving anything.</p>
+    <input id="poBusinessName" class="input" placeholder="Business / payout name" value="${esc(state.payoutAccount?.business_name || "")}" />
+    <select id="poBank" class="input"><option value="">Loading banks…</option></select>
+    <input id="poAccountNumber" class="input" inputmode="numeric" placeholder="10-digit account number" value="${esc(state.payoutAccount?.account_number || "")}" />
+    <button class="btn btn-primary btn-block" id="poGo" disabled>Verify &amp; save</button>
+  `);
+
+  const bankSelect = $("#poBank");
+  const { data: bankData, error: bankErr } = await sbListBanks();
+  if (bankErr || !bankData?.banks) {
+    bankSelect.innerHTML = `<option value="">Couldn't load banks</option>`;
+    toast(await edgeErrorMessage(bankErr, "Couldn't load the bank list"));
+  } else {
+    bankSelect.innerHTML = `<option value="">Choose your bank</option>` +
+      bankData.banks.map((b) => `<option value="${esc(b.code)}">${esc(b.name)}</option>`).join("");
+  }
+
+  const check = () => {
+    const ok = $("#poBusinessName").value.trim() && bankSelect.value && $("#poAccountNumber").value.trim().length >= 10;
+    $("#poGo").disabled = !ok;
+  };
+  ["#poBusinessName", "#poAccountNumber"].forEach((s) => $(s).addEventListener("input", check));
+  bankSelect.addEventListener("change", check);
+  check();
+
+  $("#poGo").addEventListener("click", async () => {
+    const goBtn = $("#poGo");
+    goBtn.disabled = true; goBtn.textContent = "Verifying…";
+    const { data, error } = await sbCreatePayoutAccount({
+      business_name: $("#poBusinessName").value.trim(),
+      bank_code: bankSelect.value,
+      bank_name: bankSelect.options[bankSelect.selectedIndex].text,
+      account_number: $("#poAccountNumber").value.trim(),
+    });
+    if (error || data?.error) {
+      goBtn.disabled = false; goBtn.textContent = "Verify & save";
+      return toast((data && data.error) || await edgeErrorMessage(error, "Couldn't set up payouts"));
+    }
+    state.payoutAccount = data;
+    closeModal();
+    toast("Payout account saved — you're ready to get paid 🎉");
   });
 }
 
@@ -1947,7 +2054,8 @@ async function showItem(id) {
     <p class="detail-desc">${esc(l.desc)}</p>
     <div class="detail-meta">📍 ${esc(l.loc)}</div>
     ${trustCard}
-    ${canOrder ? `<button class="btn btn-accent btn-block" id="placeOrderBtn" style="margin-top:12px">🛒 Place order</button>` : ""}
+    ${canOrder ? `<button class="btn btn-accent btn-block" id="buyNowBtn" style="margin-top:12px">💳 Buy now</button>` : ""}
+    ${canOrder ? `<button class="btn btn-ghost btn-block" id="placeOrderBtn" style="margin-top:8px">🛒 Place order (pay seller directly)</button>` : ""}
     <button class="btn btn-primary btn-block" id="msgSeller" style="margin-top:12px">💬 Message seller</button>
   `);
   $("#msgSeller").addEventListener("click", () => openChat(l.seller));
@@ -1955,6 +2063,70 @@ async function showItem(id) {
   if (vs) vs.addEventListener("click", () => openShop(vs.dataset.openShop));
   const orderBtn = document.querySelector("#placeOrderBtn");
   if (orderBtn) orderBtn.addEventListener("click", () => showPlaceOrder(l, shop.id));
+  const buyNowBtn = document.querySelector("#buyNowBtn");
+  if (buyNowBtn) buyNowBtn.addEventListener("click", () => showBuyNow(l));
+}
+
+/* --- buyer pays immediately via Paystack; vendor's share is split to
+   their bank automatically (see init-marketplace-payment) --- */
+function showBuyNow(l) {
+  const summaryFor = (qty) => {
+    const itemTotal = l.price * qty;
+    const fee = marketplaceFee(itemTotal);
+    const total = estimateGrossUpTotal(itemTotal + fee);
+    return `
+      <div class="sum-row"><span>${qty} × ${esc(l.title)}</span><b>${naira(itemTotal)}</b></div>
+      <div class="sum-row"><span>Service fee</span><b>${naira(fee)}</b></div>
+      <div class="sum-div"></div>
+      <div class="sum-total"><span>Total</span><span>${naira(total)}</span></div>`;
+  };
+
+  openModal(`
+    ${modalHead("Buy now")}
+    ${imgBlock(l.img, "detail-img")}
+    <div class="detail-title">${esc(l.title)}</div>
+    <div class="detail-price">${naira(l.price)} each</div>
+    <input id="buyQty" class="input" type="number" min="1" value="1" placeholder="Quantity" />
+    <div class="summary" id="buySummary">${summaryFor(1)}</div>
+    <button class="btn btn-primary btn-block" id="buyGo">Continue to payment</button>
+  `);
+
+  $("#buyQty").addEventListener("input", () => {
+    const q = Math.max(1, Number($("#buyQty").value) || 1);
+    $("#buySummary").innerHTML = summaryFor(q);
+  });
+
+  $("#buyGo").addEventListener("click", async () => {
+    const qty = Number($("#buyQty").value);
+    if (!qty || qty < 1) return toast("Enter a valid quantity");
+    const buyGo = $("#buyGo");
+    buyGo.disabled = true; buyGo.textContent = "Starting payment…";
+
+    const { data, error } = await sbInitMarketplacePayment(l.id, qty);
+    if (error || data?.error) {
+      buyGo.disabled = false; buyGo.textContent = "Continue to payment";
+      return toast((data && data.error) || await edgeErrorMessage(error, "Couldn't start payment"));
+    }
+
+    const popup = new PaystackPop();
+    popup.resumeTransaction(data.access_code, {
+      onSuccess: async () => {
+        const { data: confirmData, error: confirmErr } = await sbConfirmMarketplacePayment(data.order_id);
+        if (confirmErr || !confirmData || confirmData.error) {
+          const msg = (confirmData && confirmData.error) || await edgeErrorMessage(confirmErr, "Something went wrong confirming your payment.");
+          toast(msg);
+          return;
+        }
+        closeModal();
+        toast("Payment successful — order placed 🎉");
+        await hydrateMarketplace();
+      },
+      onCancel: () => {
+        buyGo.disabled = false; buyGo.textContent = "Continue to payment";
+        toast("Payment cancelled");
+      },
+    });
+  });
 }
 
 /* --- buyer places an order for a product-backed listing --- */
@@ -2369,37 +2541,13 @@ function renderCheckout(co) {
   const payLabel = free ? "Get free tickets" : "Pay " + naira(t.subtotal);
   $("#coPay").addEventListener("click", async () => {
     const payBtn = $("#coPay");
-    payBtn.disabled = true; payBtn.textContent = free ? "Reserving…" : "Processing…";
 
-    // reserve one pending ticket row per tier the buyer selected
-    const rows = [];
-    co.ev.tiers.forEach((tier) => {
-      const q = co.qty[tier.id] || 0;
-      if (q > 0) {
-        const fee = eventFee(tier.price) * q;
-        rows.push({
-          tier_id: tier.id, buyer_id: state.user.id, qty: q,
-          total: tier.price * q + fee,
-          code: "CH-" + Math.random().toString(36).slice(2, 8).toUpperCase(),
-          status: "pending",
-        });
-      }
-    });
-    if (!rows.length) { payBtn.disabled = false; payBtn.textContent = payLabel; return; }
-
-    const { data: reserved, error: reserveErr } = await sbInsertTickets(rows);
-    if (reserveErr) {
-      payBtn.disabled = false; payBtn.textContent = payLabel;
-      return toast("Couldn't reserve tickets: " + reserveErr.message);
-    }
-    const ticketIds = reserved.map((r) => r.id);
-
-    const finish = async (reference) => {
-      const { data: confirmData, error: confirmErr } = await sbConfirmTicket(ticketIds, reference);
+    const finish = async (ticketIds) => {
+      const { data: confirmData, error: confirmErr } = await sbConfirmTicket(ticketIds);
       if (confirmErr || !confirmData || confirmData.error) {
         const msg = (confirmData && confirmData.error) || await edgeErrorMessage(confirmErr, "Something went wrong confirming your tickets.");
         payBtn.disabled = false; payBtn.textContent = payLabel;
-        return toast(msg || "Something went wrong confirming your tickets.");
+        return toast(msg);
       }
       clearInterval(checkoutTimer);
       closeModal();
@@ -2408,23 +2556,52 @@ function renderCheckout(co) {
     };
 
     if (free) {
-      await finish(undefined);
+      payBtn.disabled = true; payBtn.textContent = "Reserving…";
+      // free tickets are reserved directly by the client — no split, no
+      // Paystack involvement, so there's nothing to lock in server-side
+      const rows = [];
+      co.ev.tiers.forEach((tier) => {
+        const q = co.qty[tier.id] || 0;
+        if (q > 0) {
+          rows.push({
+            tier_id: tier.id, buyer_id: state.user.id, qty: q, total: 0,
+            code: "CH-" + Math.random().toString(36).slice(2, 8).toUpperCase(),
+            status: "pending",
+          });
+        }
+      });
+      if (!rows.length) { payBtn.disabled = false; payBtn.textContent = payLabel; return; }
+      const { data: reserved, error: reserveErr } = await sbInsertTickets(rows);
+      if (reserveErr) {
+        payBtn.disabled = false; payBtn.textContent = payLabel;
+        return toast("Couldn't reserve tickets: " + reserveErr.message);
+      }
+      await finish(reserved.map((r) => r.id));
       return;
     }
 
-    const handler = PaystackPop.setup({
-      key: PAYSTACK_PUBLIC_KEY,
-      email: co.contact.email,
-      amount: t.subtotal * 100, // Paystack takes kobo
-      currency: "NGN",
-      metadata: { event: co.ev.title, ticket_count: t.count },
-      callback: (response) => { finish(response.reference); },
-      onClose: () => {
+    // paid tickets: the split (organizer subaccount + platform fee) is
+    // locked in server-side before the popup ever shows — see
+    // init-ticket-payment
+    payBtn.disabled = true; payBtn.textContent = "Starting payment…";
+    const tierSelections = co.ev.tiers
+      .filter((tier) => (co.qty[tier.id] || 0) > 0)
+      .map((tier) => ({ tier_id: tier.id, qty: co.qty[tier.id] }));
+
+    const { data: initData, error: initErr } = await sbInitTicketPayment(tierSelections);
+    if (initErr || initData?.error) {
+      payBtn.disabled = false; payBtn.textContent = payLabel;
+      return toast((initData && initData.error) || await edgeErrorMessage(initErr, "Couldn't start payment"));
+    }
+
+    const popup = new PaystackPop();
+    popup.resumeTransaction(initData.access_code, {
+      onSuccess: () => finish(initData.ticket_ids),
+      onCancel: () => {
         payBtn.disabled = false; payBtn.textContent = payLabel;
         toast("Payment cancelled");
       },
     });
-    handler.openIframe();
   });
 }
 
@@ -2881,11 +3058,24 @@ function bindScreenEvents() {
       render(); toast("Removed from marketplace");
     }));
 
-  // orders: complete → records the sale, updates stock and trust stats
+  // orders: complete → for old free "Place order" reservations (still
+  // unpaid), this records the sale and updates stock, same as always.
+  // For paid "Buy now" orders, confirm-marketplace-payment already did
+  // both of those at payment time — completing here is just a
+  // fulfillment acknowledgment (status flag only).
   document.querySelectorAll("[data-complete]").forEach((b) =>
     b.addEventListener("click", async () => {
       const id = b.dataset.complete;
       const o = state.myShop.orders.find((x) => x.id === id);
+
+      if (o.paymentStatus === "paid") {
+        const { error: orderErr } = await sbCompleteOrder(o.id);
+        if (orderErr) return toast("Couldn't complete order: " + orderErr.message);
+        o.status = "completed";
+        render(); toast("Order marked complete ✅");
+        return;
+      }
+
       const p = state.products.find((x) => x.id === o.pid);
       if (!p || p.stock < o.qty) return toast("Not enough stock to complete this order");
       const newStock = p.stock - o.qty;
@@ -2951,6 +3141,8 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       render();
       await hydrateMarketplace();
       await hydrateEvents();
+      await hydratePayoutAccount();
+      await hydrateFees();
       return;
     }
   }

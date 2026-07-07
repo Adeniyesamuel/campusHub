@@ -9,7 +9,10 @@
 
 const SUPABASE_URL = "https://tiqubxxtthtbbivwfdvz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_owMigWTOBc4lR4c6nJSBlA_USCirao5";
-const PAYSTACK_PUBLIC_KEY = "pk_test_23fcfd1f380db72bb577e1584eb64fde3dc31c33";
+// Paystack's public key is no longer used client-side at all — every
+// payment is initialized server-side (init-ticket-payment /
+// init-marketplace-payment) and resumed via an access_code, which
+// doesn't require the public key on this end.
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -56,6 +59,9 @@ const sbGetSales = (shopId) => sb.from("sales").select().eq("shop_id", shopId).o
 const sbInsertSale = (row) => sb.from("sales").insert(row).select().single();
 const sbGetPublicSalesCount = (shopId) => sb.rpc("get_shop_sales_count", { target_shop_id: shopId });
 
+/* ---------- configurable platform fees ---------- */
+const sbGetPlatformFees = () => sb.from("platform_fees").select();
+
 /* ---------- events + tickets ---------- */
 const sbGetEvents = () => sb.from("events").select("*, ticket_tiers(*)").order("starts_at", { ascending: true });
 const sbInsertEvent = (row) => sb.from("events").insert(row).select().single();
@@ -64,6 +70,23 @@ const sbGetTierSoldCounts = () => sb.rpc("get_tier_sold_counts");
 const sbGetMyTickets = (buyerId) =>
   sb.from("tickets").select("id, qty, total, code, used_at, ticket_tiers(name, price, events(title))").eq("buyer_id", buyerId).eq("status", "paid").order("created_at", { ascending: false });
 const sbInsertTickets = (rows) => sb.from("tickets").insert(rows).select();
-const sbConfirmTicket = (ticketIds, reference) =>
-  sb.functions.invoke("confirm-ticket", { body: { ticket_ids: ticketIds, reference } });
+// reference is no longer accepted here — confirm-ticket reads the
+// reference it stored itself at reservation time (see init-ticket-payment)
+const sbConfirmTicket = (ticketIds) =>
+  sb.functions.invoke("confirm-ticket", { body: { ticket_ids: ticketIds } });
 const sbScanTicket = (code) => sb.functions.invoke("scan-ticket", { body: { code } });
+const sbInitTicketPayment = (tierSelections) =>
+  sb.functions.invoke("init-ticket-payment", { body: { tier_selections: tierSelections } });
+
+/* ---------- payouts (vendors + event organizers) ---------- */
+const sbGetPayoutAccount = (profileId) =>
+  sb.from("payout_accounts").select().eq("profile_id", profileId).maybeSingle();
+const sbListBanks = () => sb.functions.invoke("list-banks");
+const sbCreatePayoutAccount = (payload) =>
+  sb.functions.invoke("create-payout-account", { body: payload });
+
+/* ---------- marketplace "Buy now" ---------- */
+const sbInitMarketplacePayment = (listingId, qty) =>
+  sb.functions.invoke("init-marketplace-payment", { body: { listing_id: listingId, qty } });
+const sbConfirmMarketplacePayment = (orderId) =>
+  sb.functions.invoke("confirm-marketplace-payment", { body: { order_id: orderId } });
