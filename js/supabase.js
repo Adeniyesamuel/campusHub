@@ -49,6 +49,26 @@ const sbInsertExam = (row) => sb.from("exams").insert(row);
 const sbUpdateExam = (id, patch) => sb.from("exams").update(patch).eq("id", id);
 const sbDeleteExam = (id) => sb.from("exams").delete().eq("id", id);
 
+/* ---------- assignments + submissions ---------- */
+const sbGetAssignments = (level, dept) =>
+  sb.from("assignments").select().eq("level", level).eq("dept", dept).order("due_at");
+const sbInsertAssignment = (row) => sb.from("assignments").insert(row);
+
+const sbGetMySubmissions = (studentId) =>
+  sb.from("assignment_submissions").select().eq("student_id", studentId);
+// path convention: {student_id}/{assignment_id}-{uuid}.{ext} — the
+// folder is the owner, matching avatars/chat-images
+const sbUploadAssignmentFile = (studentId, assignmentId, file) => {
+  const ext = (file.name.split(".").pop() || "dat").toLowerCase();
+  const path = `${studentId}/${assignmentId}-${crypto.randomUUID()}.${ext}`;
+  return sb.storage.from("assignment-files").upload(path, file).then(({ error }) => ({ path, error }));
+};
+const sbUpsertSubmission = (assignmentId, studentId, filePath) =>
+  sb.from("assignment_submissions").upsert(
+    { assignment_id: assignmentId, student_id: studentId, file_path: filePath, submitted_at: new Date().toISOString() },
+    { onConflict: "assignment_id,student_id" }
+  );
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);

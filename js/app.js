@@ -64,10 +64,7 @@ const state = {
     announcements: [], // loaded from Supabase after login — see hydrateClassInfo()
     timetable: [],     // loaded from Supabase after login — see hydrateClassInfo()
     exams: [],         // loaded from Supabase after login — see hydrateClassInfo()
-    assignments: [
-      { id: 1, course: "CSC 203", title: "Flowchart & pseudocode exercise (Q1–Q5)", due: "Fri, 17 Jul", submitted: false, file: null },
-      { id: 2, course: "STA 201", title: "Probability worksheet 2", due: "Mon, 20 Jul", submitted: true, file: "sta201_worksheet2.pdf" },
-    ],
+    assignments: [], // loaded from Supabase after login — see hydrateClassInfo()
     polls: [
       { id: 1, q: "Should we move tomorrow's CSC 201 class from 10am to 2pm?", options: [ { label: "Yes, move it", votes: 34 }, { label: "No, keep 10am", votes: 21 } ], voted: null },
     ],
@@ -555,6 +552,17 @@ async function hydrateClassInfo() {
   state.classroom.exams = (examRows || []).map((r) => ({
     id: r.id, course: r.course, type: r.exam_type, startsAt: r.starts_at, venue: r.venue,
   }));
+
+  const { data: assignRows } = await sbGetAssignments(level, dept);
+  const { data: subRows } = await sbGetMySubmissions(state.user.id);
+  const subByAssignment = new Map((subRows || []).map((s) => [s.assignment_id, s]));
+  state.classroom.assignments = (assignRows || []).map((r) => {
+    const sub = subByAssignment.get(r.id);
+    return {
+      id: r.id, course: r.course, title: r.title, due: fmtEventDateTime(r.due_at),
+      submitted: !!sub, file: sub ? sub.file_path.split("/").pop() : null,
+    };
+  });
 }
 
 /* loads the public marketplace feed for everyone, plus the vendor's own
@@ -1490,7 +1498,7 @@ function classTabHTML() {
       </div>
     </button>`).join("") : `<div class="empty">No exams or tests added yet</div>`;
 
-  const assigns = cr.assignments.map((a) => `
+  const assigns = cr.assignments.length ? cr.assignments.map((a) => `
     <div class="card row-item">
       <div class="row-ico">${a.submitted ? "✅" : "📄"}</div>
       <div class="row-main">
@@ -1500,7 +1508,7 @@ function classTabHTML() {
       ${a.submitted
         ? `<span class="stock-pill stock-ok">Submitted</span>`
         : `<button class="btn btn-accent btn-sm" data-submit="${a.id}">Submit</button>`}
-    </div>`).join("");
+    </div>`).join("") : `<div class="empty">No assignments yet</div>`;
 
   const polls = cr.polls.map((p) => {
     const total = p.options.reduce((s, o) => s + o.votes, 0) || 1;
@@ -1554,7 +1562,10 @@ function classTabHTML() {
         ${exams}
       </div>
       <div>
-        <div class="section-head"><div><div class="eyebrow">Don't carry over 😅</div><h3 class="h3">Assignments</h3></div></div>
+        <div class="section-head">
+          <div><div class="eyebrow">Don't carry over 😅</div><h3 class="h3">Assignments</h3></div>
+          <button class="btn btn-ghost btn-sm" data-act="add-assignment">＋ Add</button>
+        </div>
         ${assigns}
         <div class="section-head"><div><div class="eyebrow">Class decisions</div><h3 class="h3">Polls</h3></div></div>
         ${polls}
@@ -1802,7 +1813,10 @@ function bindStudyEvents() {
     b.addEventListener("click", () => showExamForm(state.classroom.exams.find((e) => e.id === b.dataset.editExam))));
 
   document.querySelectorAll("[data-submit]").forEach((b) =>
-    b.addEventListener("click", () => showAssignmentSubmit(Number(b.dataset.submit))));
+    b.addEventListener("click", () => showAssignmentSubmit(b.dataset.submit)));
+
+  const addAssignBtn = document.querySelector('[data-act="add-assignment"]');
+  if (addAssignBtn) addAssignBtn.addEventListener("click", showAssignmentForm);
   document.querySelectorAll("[data-poll]").forEach((b) =>
     b.addEventListener("click", () => {
       const poll = state.classroom.polls.find((p) => p.id === Number(b.dataset.poll));
@@ -1892,11 +1906,43 @@ function bindStudyEvents() {
   }
 }
 
-/* --- assignment submission modal --- */
+/* --- post a new assignment (immutable once posted, same as announcements) --- */
+function showAssignmentForm() {
+  openModal(`
+    ${modalHead("Post an assignment")}
+    <input id="asgCourse" class="input" placeholder="Course (e.g. CSC 201)" />
+    <input id="asgTitle" class="input" placeholder="Assignment title" />
+    <textarea id="asgDesc" class="input" rows="2" placeholder="Details (optional)"></textarea>
+    <div class="field-label">Due</div>
+    <input id="asgDate" class="input" type="date" />
+    <input id="asgTime" class="input" type="time" />
+    <button class="btn btn-primary btn-block" id="asgGo">Post assignment</button>
+  `);
+  $("#asgGo").addEventListener("click", async () => {
+    const course = $("#asgCourse").value.trim();
+    const title = $("#asgTitle").value.trim();
+    const date = $("#asgDate").value;
+    const time = $("#asgTime").value;
+    if (!course || !title || !date || !time) return toast("Fill in course, title, and due date/time");
+    const btn = $("#asgGo");
+    btn.disabled = true; btn.textContent = "Posting…";
+    const { error } = await sbInsertAssignment({
+      author_id: state.user.id, level: state.user.level, dept: state.user.dept,
+      course, title, description: $("#asgDesc").value.trim() || null,
+      due_at: new Date(date + "T" + time).toISOString(),
+    });
+    if (error) { btn.disabled = false; btn.textContent = "Post assignment"; return toast("Couldn't post: " + error.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast("Assignment posted");
+  });
+}
+
+/* --- assignment submission modal: real file upload to the private
+   assignment-files bucket, then a per-student submission row --- */
 function showAssignmentSubmit(id) {
   const a = state.classroom.assignments.find((x) => x.id === id);
   if (!a) return;
-  let fileName = null;
+  let file = null;
   openModal(`
     ${modalHead("Submit assignment")}
     <div class="row-title">${esc(a.course)}: ${esc(a.title)}</div>
@@ -1909,18 +1955,23 @@ function showAssignmentSubmit(id) {
     </div>
     <button class="btn btn-primary btn-block" id="subGo" disabled>Submit</button>
   `);
-  const box = $("#subBox"), file = $("#subFile"), go = $("#subGo");
-  box.addEventListener("click", () => file.click());
-  file.addEventListener("change", () => {
-    const f = file.files && file.files[0];
-    if (!f) return;
-    fileName = f.name;
-    box.querySelector(".up-text").textContent = "📄 " + f.name;
+  const box = $("#subBox"), fileInput = $("#subFile"), go = $("#subGo");
+  box.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    box.querySelector(".up-text").textContent = "📄 " + file.name;
     box.querySelector(".up-hint").textContent = "Tap to change file";
     go.disabled = false;
   });
-  go.addEventListener("click", () => {
-    a.submitted = true; a.file = fileName;
+  go.addEventListener("click", async () => {
+    if (!file) return;
+    go.disabled = true; go.textContent = "Uploading…";
+    const { path, error: upErr } = await sbUploadAssignmentFile(state.user.id, a.id, file);
+    if (upErr) { go.disabled = false; go.textContent = "Submit"; return toast("Couldn't upload: " + upErr.message); }
+    const { error } = await sbUpsertSubmission(a.id, state.user.id, path);
+    if (error) { go.disabled = false; go.textContent = "Submit"; return toast("Couldn't submit: " + error.message); }
+    await hydrateClassInfo();
     closeModal(); render(); toast("Assignment submitted ✅");
   });
 }
