@@ -61,23 +61,9 @@ const state = {
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
   classroom: {
-    announcements: [
-      { id: 1, who: "Course Rep", text: "CSC 201 test has been confirmed for next week Thursday. Chapters 1–4. No excuses o!", time: "Today, 7:50 AM" },
-      { id: 2, who: "Course Rep", text: "Dr. Adeyemi says submit all outstanding practical reports before Friday.", time: "Yesterday" },
-    ],
-    timetable: [
-      { day: "Mon", course: "CSC 201", time: "10:00 – 12:00", venue: "LT2" },
-      { day: "Mon", course: "MTH 201", time: "1:00 – 3:00", venue: "Maths Lab" },
-      { day: "Tue", course: "GST 201", time: "9:00 – 11:00", venue: "Main Aud." },
-      { day: "Wed", course: "CSC 203", time: "8:00 – 10:00", venue: "CITS Hall" },
-      { day: "Thu", course: "CSC 205", time: "12:00 – 2:00", venue: "LT1" },
-      { day: "Fri", course: "STA 201", time: "10:00 – 12:00", venue: "Stats Room" },
-    ],
-    exams: [
-      { id: 1, course: "CSC 201", type: "Test", date: "Thu, 16 Jul", time: "10:00 AM", venue: "LT2" },
-      { id: 2, course: "MTH 201", type: "Test", date: "Mon, 20 Jul", time: "1:00 PM", venue: "Maths Lab" },
-      { id: 3, course: "GST 201", type: "Exam", date: "Wed, 5 Aug", time: "9:00 AM", venue: "Main Aud." },
-    ],
+    announcements: [], // loaded from Supabase after login — see hydrateClassInfo()
+    timetable: [],     // loaded from Supabase after login — see hydrateClassInfo()
+    exams: [],         // loaded from Supabase after login — see hydrateClassInfo()
     assignments: [
       { id: 1, course: "CSC 203", title: "Flowchart & pseudocode exercise (Q1–Q5)", due: "Fri, 17 Jul", submitted: false, file: null },
       { id: 2, course: "STA 201", title: "Probability worksheet 2", due: "Mon, 20 Jul", submitted: true, file: "sta201_worksheet2.pdf" },
@@ -465,8 +451,8 @@ function hydrateUser(profileRow, businessRow, via) {
 const fmtRowTime = (iso) =>
   new Date(iso).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit", hour12: true }).toUpperCase();
 
-// "Sat, 15 Aug · 7:00 PM" — the one place event date/time gets formatted,
-// used everywhere an event's starts_at is displayed
+// "Sat, 15 Aug · 7:00 PM" — shared by anything with a starts_at
+// timestamptz (events, exams/tests)
 const fmtEventDateTime = (iso) => {
   const d = new Date(iso);
   const datePart = d.toLocaleDateString("en-NG", { weekday: "short", day: "numeric", month: "short" });
@@ -546,6 +532,29 @@ async function hydrateFeed() {
 async function hydrateLostFound() {
   const { data } = await sbGetLostFound();
   state.lost = (data || []).map(mapLostFoundRow);
+}
+
+/* loads announcements/timetable/exams for the logged-in user's exact
+   (level, dept) class — skipped for accounts with no academic profile
+   (external vendors), same gating as the Study tab itself */
+async function hydrateClassInfo() {
+  if (!state.user.level) return;
+  const { level, dept } = state.user;
+
+  const { data: annRows } = await sbGetAnnouncements(level, dept);
+  state.classroom.announcements = (annRows || []).map((r) => ({
+    id: r.id, who: r.author?.name || "Classmate", text: r.text, time: fmtRowTime(r.created_at),
+  }));
+
+  const { data: ttRows } = await sbGetTimetable(level, dept);
+  state.classroom.timetable = (ttRows || []).map((r) => ({
+    id: r.id, day: r.day, course: r.course, time: r.time_label, venue: r.venue,
+  }));
+
+  const { data: examRows } = await sbGetExams(level, dept);
+  state.classroom.exams = (examRows || []).map((r) => ({
+    id: r.id, course: r.course, type: r.exam_type, startsAt: r.starts_at, venue: r.venue,
+  }));
 }
 
 /* loads the public marketplace feed for everyone, plus the vendor's own
@@ -763,6 +772,7 @@ async function completeAuth(via) {
   toast(msg);
   await hydrateFeed();
   await hydrateLostFound();
+  await hydrateClassInfo();
   await hydrateMarketplace();
   await hydrateEvents();
   await hydratePayoutAccount();
@@ -1446,33 +1456,39 @@ function studyScreen() {
 function classTabHTML() {
   const cr = state.classroom;
 
-  const anns = cr.announcements.map((a) => `
+  const annComposer = `
+    <div class="composer">
+      <input id="annInput" class="input" placeholder="Post an announcement to your class…" />
+      <button class="btn btn-primary" data-act="post-announcement">Post</button>
+    </div>`;
+
+  const anns = cr.announcements.length ? cr.announcements.map((a) => `
     <div class="card">
       <div class="post-head">
         <div class="post-avatar">📣</div>
         <div><div class="post-who">${esc(a.who)}</div><div class="post-time">${esc(a.time)}</div></div>
       </div>
       <p class="post-body">${esc(a.text)}</p>
-    </div>`).join("");
+    </div>`).join("") : `<div class="empty">No announcements yet</div>`;
 
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri"];
   const tt = days.map((d) => {
     const rows = cr.timetable.filter((t) => t.day === d);
     if (!rows.length) return "";
     return `<div class="tt-day">${d}</div>` + rows.map((t) => `
-      <div class="tt-row">
+      <button class="tt-row" data-edit-tt="${t.id}">
         <b>${esc(t.course)}</b><span>${esc(t.time)}</span><span>📍 ${esc(t.venue)}</span>
-      </div>`).join("");
-  }).join("");
+      </button>`).join("");
+  }).join("") || `<div class="empty">No classes added yet</div>`;
 
-  const exams = cr.exams.map((e) => `
-    <div class="card row-item">
+  const exams = cr.exams.length ? cr.exams.map((e) => `
+    <button class="card row-item" data-edit-exam="${e.id}" style="width:100%;text-align:left">
       <div class="row-ico">${e.type === "Exam" ? "📝" : "🧪"}</div>
       <div class="row-main">
         <div class="row-title">${esc(e.course)} — ${esc(e.type)}</div>
-        <div class="row-sub">${esc(e.date)} · ${esc(e.time)} · ${esc(e.venue)}</div>
+        <div class="row-sub">${esc(fmtEventDateTime(e.startsAt))} · ${esc(e.venue)}</div>
       </div>
-    </div>`).join("");
+    </button>`).join("") : `<div class="empty">No exams or tests added yet</div>`;
 
   const assigns = cr.assignments.map((a) => `
     <div class="card row-item">
@@ -1523,11 +1539,18 @@ function classTabHTML() {
   return `
     <div class="two-col">
       <div>
-        <div class="section-head"><div><div class="eyebrow">From your course rep</div><h3 class="h3">Class announcements</h3></div></div>
+        <div class="section-head"><div><div class="eyebrow">From your classmates</div><h3 class="h3">Class announcements</h3></div></div>
+        ${annComposer}
         ${anns}
-        <div class="section-head"><div><div class="eyebrow">This week</div><h3 class="h3">Timetable</h3></div></div>
+        <div class="section-head">
+          <div><div class="eyebrow">This week</div><h3 class="h3">Timetable</h3></div>
+          <button class="btn btn-ghost btn-sm" data-act="add-timetable">＋ Add</button>
+        </div>
         <div class="card">${tt}</div>
-        <div class="section-head"><div><div class="eyebrow">Coming up</div><h3 class="h3">Tests &amp; exam dates</h3></div></div>
+        <div class="section-head">
+          <div><div class="eyebrow">Coming up</div><h3 class="h3">Tests &amp; exam dates</h3></div>
+          <button class="btn btn-ghost btn-sm" data-act="add-exam">＋ Add</button>
+        </div>
         ${exams}
       </div>
       <div>
@@ -1662,11 +1685,122 @@ function cgpaTabHTML() {
     </div>`;
 }
 
+/* timetable is a shared, mutable resource — any classmate can add, edit,
+   or remove any entry (no ownership check, matches the RLS policy) */
+function showTimetableForm(existing) {
+  const isEdit = !!existing;
+  openModal(`
+    ${modalHead(isEdit ? "Edit class" : "Add a class")}
+    <div class="field-label">Day</div>
+    <select id="ttDay" class="input">
+      ${["Mon", "Tue", "Wed", "Thu", "Fri"].map((d) =>
+        `<option value="${d}" ${existing?.day === d ? "selected" : ""}>${d}</option>`).join("")}
+    </select>
+    <input id="ttCourse" class="input" placeholder="Course (e.g. CSC 201)" value="${esc(existing?.course || "")}" />
+    <input id="ttTime" class="input" placeholder="Time (e.g. 10:00 – 12:00)" value="${esc(existing?.time || "")}" />
+    <input id="ttVenue" class="input" placeholder="Venue" value="${esc(existing?.venue || "")}" />
+    <button class="btn btn-primary btn-block" id="ttGo">${isEdit ? "Save changes" : "Add to timetable"}</button>
+    ${isEdit ? `<button class="btn btn-ghost btn-block" id="ttDel" style="margin-top:8px;color:var(--rose-600)">Remove</button>` : ""}
+  `);
+  $("#ttGo").addEventListener("click", async () => {
+    const course = $("#ttCourse").value.trim();
+    const time_label = $("#ttTime").value.trim();
+    const venue = $("#ttVenue").value.trim();
+    if (!course || !time_label || !venue) return toast("Fill in course, time, and venue");
+    const btn = $("#ttGo");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const row = { level: state.user.level, dept: state.user.dept, day: $("#ttDay").value, course, time_label, venue, updated_by: state.user.id };
+    const { error } = isEdit ? await sbUpdateTimetableEntry(existing.id, row) : await sbInsertTimetableEntry(row);
+    if (error) { btn.disabled = false; btn.textContent = isEdit ? "Save changes" : "Add to timetable"; return toast("Couldn't save: " + error.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast(isEdit ? "Timetable updated" : "Added to timetable");
+  });
+  const delBtn = $("#ttDel");
+  if (delBtn) delBtn.addEventListener("click", async () => {
+    delBtn.disabled = true; delBtn.textContent = "Removing…";
+    const { error } = await sbDeleteTimetableEntry(existing.id);
+    if (error) { delBtn.disabled = false; delBtn.textContent = "Remove"; return toast("Couldn't remove: " + error.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast("Removed from timetable");
+  });
+}
+
+/* exams share the timetable's collaborative-editing policy — any
+   classmate can add/edit/remove */
+function showExamForm(existing) {
+  const isEdit = !!existing;
+  const d = existing ? new Date(existing.startsAt) : null;
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateVal = d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : "";
+  const timeVal = d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : "";
+  openModal(`
+    ${modalHead(isEdit ? "Edit exam/test" : "Add an exam or test")}
+    <input id="exCourse" class="input" placeholder="Course (e.g. CSC 201)" value="${esc(existing?.course || "")}" />
+    <select id="exType" class="input">
+      <option value="Test" ${existing?.type === "Test" ? "selected" : ""}>Test</option>
+      <option value="Exam" ${existing?.type === "Exam" ? "selected" : ""}>Exam</option>
+    </select>
+    <input id="exDate" class="input" type="date" value="${dateVal}" />
+    <input id="exTime" class="input" type="time" value="${timeVal}" />
+    <input id="exVenue" class="input" placeholder="Venue" value="${esc(existing?.venue || "")}" />
+    <button class="btn btn-primary btn-block" id="exGo">${isEdit ? "Save changes" : "Add"}</button>
+    ${isEdit ? `<button class="btn btn-ghost btn-block" id="exDel" style="margin-top:8px;color:var(--rose-600)">Remove</button>` : ""}
+  `);
+  $("#exGo").addEventListener("click", async () => {
+    const course = $("#exCourse").value.trim();
+    const date = $("#exDate").value;
+    const time = $("#exTime").value;
+    const venue = $("#exVenue").value.trim();
+    if (!course || !date || !time || !venue) return toast("Fill in every field");
+    const btn = $("#exGo");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const row = {
+      level: state.user.level, dept: state.user.dept, course,
+      exam_type: $("#exType").value, starts_at: new Date(date + "T" + time).toISOString(), venue,
+    };
+    if (!isEdit) row.created_by = state.user.id;
+    const { error } = isEdit ? await sbUpdateExam(existing.id, row) : await sbInsertExam(row);
+    if (error) { btn.disabled = false; btn.textContent = isEdit ? "Save changes" : "Add"; return toast("Couldn't save: " + error.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast(isEdit ? "Exam updated" : "Added");
+  });
+  const delBtn = $("#exDel");
+  if (delBtn) delBtn.addEventListener("click", async () => {
+    delBtn.disabled = true; delBtn.textContent = "Removing…";
+    const { error } = await sbDeleteExam(existing.id);
+    if (error) { delBtn.disabled = false; delBtn.textContent = "Remove"; return toast("Couldn't remove: " + error.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast("Removed");
+  });
+}
+
 function bindStudyEvents() {
   document.querySelectorAll("[data-study]").forEach((b) =>
     b.addEventListener("click", () => { state.studyTab = b.dataset.study; render(); }));
 
   /* my class */
+  const annBtn = document.querySelector('[data-act="post-announcement"]');
+  if (annBtn) annBtn.addEventListener("click", async () => {
+    const inp = $("#annInput");
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = "";
+    const { error } = await sbInsertAnnouncement({ author_id: state.user.id, level: state.user.level, dept: state.user.dept, text });
+    if (error) return toast("Couldn't post: " + error.message);
+    await hydrateClassInfo();
+    render(); toast("Posted to your class");
+  });
+
+  const addTtBtn = document.querySelector('[data-act="add-timetable"]');
+  if (addTtBtn) addTtBtn.addEventListener("click", () => showTimetableForm(null));
+  document.querySelectorAll("[data-edit-tt]").forEach((b) =>
+    b.addEventListener("click", () => showTimetableForm(state.classroom.timetable.find((t) => t.id === b.dataset.editTt))));
+
+  const addExamBtn = document.querySelector('[data-act="add-exam"]');
+  if (addExamBtn) addExamBtn.addEventListener("click", () => showExamForm(null));
+  document.querySelectorAll("[data-edit-exam]").forEach((b) =>
+    b.addEventListener("click", () => showExamForm(state.classroom.exams.find((e) => e.id === b.dataset.editExam))));
+
   document.querySelectorAll("[data-submit]").forEach((b) =>
     b.addEventListener("click", () => showAssignmentSubmit(Number(b.dataset.submit))));
   document.querySelectorAll("[data-poll]").forEach((b) =>
@@ -3495,6 +3629,7 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       render();
       await hydrateFeed();
       await hydrateLostFound();
+      await hydrateClassInfo();
       await hydrateMarketplace();
       await hydrateEvents();
       await hydratePayoutAccount();

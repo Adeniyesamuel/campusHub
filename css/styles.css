@@ -759,9 +759,12 @@ body.unauthed .content { max-width: none; padding: 0; }
   display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px;
   font-size: 13px; padding: 8px 0;
   border-bottom: 1px solid var(--line); color: var(--ink);
+  width: 100%; background: none; border-left: none; border-right: none; border-top: none;
+  text-align: left; cursor: pointer;
 }
 .tt-row:last-child { border-bottom: none; }
 .tt-row span { color: var(--muted); }
+.tt-row:hover { background: var(--bg); }
 
 /* polls */
 .poll-opts { display: grid; gap: 8px; margin-top: 10px; }

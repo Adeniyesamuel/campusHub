@@ -32,6 +32,23 @@ const sbGetLostFound = () =>
   sb.from("lost_found_reports").select("*, reporter:profiles!reporter_id(name)").order("created_at", { ascending: false });
 const sbInsertLostFound = (row) => sb.from("lost_found_reports").insert(row);
 
+/* ---------- class info (announcements, timetable, exams) ---------- */
+const sbGetAnnouncements = (level, dept) =>
+  sb.from("announcements").select("*, author:profiles!author_id(name)").eq("level", level).eq("dept", dept).order("created_at", { ascending: false });
+const sbInsertAnnouncement = (row) => sb.from("announcements").insert(row);
+
+const sbGetTimetable = (level, dept) =>
+  sb.from("timetable_entries").select().eq("level", level).eq("dept", dept).order("day");
+const sbInsertTimetableEntry = (row) => sb.from("timetable_entries").insert(row);
+const sbUpdateTimetableEntry = (id, patch) => sb.from("timetable_entries").update(patch).eq("id", id);
+const sbDeleteTimetableEntry = (id) => sb.from("timetable_entries").delete().eq("id", id);
+
+const sbGetExams = (level, dept) =>
+  sb.from("exams").select().eq("level", level).eq("dept", dept).order("starts_at");
+const sbInsertExam = (row) => sb.from("exams").insert(row);
+const sbUpdateExam = (id, patch) => sb.from("exams").update(patch).eq("id", id);
+const sbDeleteExam = (id) => sb.from("exams").delete().eq("id", id);
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);
