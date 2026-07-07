@@ -58,6 +58,8 @@ const state = {
   chatWith: null,     // demo mode only: name of the person the chat panel is open with
   realChatWith: null, // real mode: { id, name, conversationId } once a real chat is open
   chatMessages: [],   // real mode: messages for the currently open conversation
+  conversations: [],  // Messages inbox — loaded by hydrateConversations()
+  unreadTotal: 0,     // sum of unread counts across all conversations
 
   /* ---- The logged-in vendor's own shop ---- */
   myShop: { followers: 0, reviews: [], orders: [] },
@@ -65,7 +67,6 @@ const state = {
   // sane defaults matching platform_fees seed data — overwritten by
   // hydrateFees() as soon as we can reach the database
   fees: { events: { percent: 5, min_fee: 0 }, marketplace: { percent: 2.5, min_fee: 100 } },
-  blockedUsers: [], // [{ id, name }] — loaded by hydrateBlockedUsers()
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
@@ -178,8 +179,9 @@ function render() {
   // nav highlighting (both navs)
   document.querySelectorAll("[data-tab]").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === state.tab));
+  renderMessageBadge();
 
-  const screens = { home: homeScreen, market: marketScreen, events: eventsScreen, shop: shopScreen, study: studyScreen };
+  const screens = { home: homeScreen, market: marketScreen, events: eventsScreen, messages: messagesScreen, shop: shopScreen, study: studyScreen };
   $("#content").innerHTML = screens[state.tab]();
   bindScreenEvents();
 }
@@ -613,10 +615,48 @@ async function hydratePayoutAccount() {
     : null;
 }
 
-/* loads who the logged-in user has blocked, so Settings can list/undo them */
-async function hydrateBlockedUsers() {
-  const { data } = await sbGetMyBlocks();
-  state.blockedUsers = (data || []).map((r) => ({ id: r.blocked_id, name: (r.blocked && r.blocked.name) || "Unknown" }));
+/* loads the Messages inbox — every conversation with at least one
+   message, newest first, with a preview and an unread count */
+async function hydrateConversations() {
+  const { data } = await sbGetMyConversations();
+  state.conversations = (data || []).map((r) => ({
+    conversationId: r.conversation_id,
+    otherUserId: r.other_user_id,
+    otherUserName: r.other_user_name || "Unknown",
+    lastMessageText: r.last_message_text,
+    lastMessageImage: r.last_message_image,
+    lastMessageAt: r.last_message_at,
+    lastSenderId: r.last_sender_id,
+    unreadCount: Number(r.unread_count) || 0,
+  }));
+  state.unreadTotal = state.conversations.reduce((s, c) => s + c.unreadCount, 0);
+  renderMessageBadge();
+}
+
+function renderMessageBadge() {
+  document.querySelectorAll('[data-badge="messages"]').forEach((el) => {
+    if (state.unreadTotal > 0) {
+      el.textContent = state.unreadTotal > 99 ? "99+" : String(state.unreadTotal);
+      el.classList.remove("hidden");
+    } else {
+      el.classList.add("hidden");
+    }
+  });
+}
+
+// a single global, unfiltered subscription (independent of any open chat
+// panel) that keeps the inbox list and nav badge live — started once
+// right after login/session-restore and left running for the session
+let myMessagesChannel = null;
+function startMyMessagesWatch() {
+  if (myMessagesChannel) return;
+  myMessagesChannel = sbSubscribeToMyMessages(async (row) => {
+    if (state.realChatWith && state.realChatWith.conversationId === row.conversation_id && row.sender_id !== state.user.id) {
+      await sbMarkConversationRead(row.conversation_id, state.user.id);
+    }
+    await hydrateConversations();
+    if (state.tab === "messages") render();
+  });
 }
 
 async function completeAuth(via) {
@@ -703,7 +743,8 @@ async function completeAuth(via) {
   await hydrateEvents();
   await hydratePayoutAccount();
   await hydrateFees();
-  await hydrateBlockedUsers();
+  await hydrateConversations();
+  startMyMessagesWatch();
 }
 
 function bindAuthEvents() {
@@ -1174,6 +1215,38 @@ function eventsScreen() {
     </div>
     <div class="events-grid">${cards}</div>
     ${myTickets}`;
+}
+
+/* ---------- MESSAGES (inbox) ---------- */
+function messagesScreen() {
+  const rows = [...state.conversations]
+    .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+    .map((c) => {
+      const unread = c.unreadCount > 0;
+      const mine = c.lastSenderId === state.user.id ? "You: " : "";
+      const preview = c.lastMessageImage ? "📷 Photo" : (c.lastMessageText || "");
+      return `
+      <button class="card row-item" data-open-conv="${c.otherUserId}" data-open-conv-name="${esc(c.otherUserName)}" style="width:100%;text-align:left">
+        <div class="row-ico">${esc((c.otherUserName || "?")[0])}</div>
+        <div class="row-main">
+          <div class="row-title">${esc(c.otherUserName)}${unread ? `<span class="msg-unread-dot"></span>` : ""}</div>
+          <div class="row-sub">${esc(mine + preview)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+          <div class="row-sub">${esc(fmtRowTime(c.lastMessageAt))}</div>
+          ${unread ? `<span class="stock-pill stock-low">${c.unreadCount}</span>` : ""}
+        </div>
+      </button>`;
+    }).join("");
+
+  return `
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">Chats</div>
+        <h1 class="h1">Messages</h1>
+      </div>
+    </div>
+    ${rows || `<div class="empty" style="padding:40px 20px;text-align:center">No conversations yet — message a seller or organizer to get started 💬</div>`}`;
 }
 
 /* ---------- SHOP (vendor dashboard) ---------- */
@@ -1804,15 +1877,6 @@ function showSettings() {
       `}
     </div>
 
-    <div class="set-group">Blocked users</div>
-    <div class="card" id="blockedUsersCard">
-      ${state.blockedUsers.length === 0 ? `<p class="row-sub">You haven't blocked anyone.</p>` : state.blockedUsers.map((b) => `
-        <div class="row-item">
-          <div class="row-main"><div class="row-title">${esc(b.name)}</div></div>
-          <button class="btn btn-ghost btn-sm" data-unblock="${b.id}">Unblock</button>
-        </div>`).join("")}
-    </div>
-
     <div class="set-group">Account</div>
     <div class="card" style="display:grid;gap:8px">
       <button class="btn btn-ghost" id="setPw">🔒 Change password</button>
@@ -1857,17 +1921,6 @@ function showSettings() {
 
   const payoutBtn = $("#setPayout");
   if (payoutBtn) payoutBtn.addEventListener("click", () => { closeModal(); showPayoutForm(); });
-
-  document.querySelectorAll("[data-unblock]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const id = b.dataset.unblock;
-      b.disabled = true; b.textContent = "…";
-      const { error } = await sbUnblockUser(id);
-      if (error) { b.disabled = false; b.textContent = "Unblock"; return toast("Couldn't unblock: " + error.message); }
-      state.blockedUsers = state.blockedUsers.filter((x) => x.id !== id);
-      closeModal(); showSettings();
-      toast("Unblocked.");
-    }));
 
   $("#setPw").addEventListener("click", () => toast("Password change comes with the real accounts system"));
   let notif = true;
@@ -2100,6 +2153,8 @@ async function openChat(otherId, otherName) {
   if (!msgsErr) state.chatMessages = (msgs || []).map(mapMessageRow);
   renderRealChat();
 
+  sbMarkConversationRead(conversationId, state.user.id).then(hydrateConversations);
+
   activeChatChannel = sbSubscribeToConversation(conversationId, (row) => {
     if (state.chatMessages.some((m) => m.id === row.id)) return; // our own optimistic push
     state.chatMessages.push(mapMessageRow(row));
@@ -2148,7 +2203,6 @@ function renderRealChat() {
       <div class="chat-head">
         <div class="chat-avatar">${esc(chat.name[0])}</div>
         <div><div class="chat-name">${esc(chat.name)}</div></div>
-        <button class="chat-block" id="chatBlock" title="Block ${esc(chat.name)}">🚫</button>
         <button class="chat-close" id="chatClose">✕</button>
       </div>
       <div class="chat-body" id="chatBody">
@@ -2166,7 +2220,6 @@ function renderRealChat() {
   body.scrollTop = body.scrollHeight;
 
   $("#chatClose").addEventListener("click", closeChat);
-  $("#chatBlock").addEventListener("click", () => confirmBlockUser(chat.id, chat.name));
   $("#chatBody").querySelectorAll("[data-report-msg]").forEach((b) =>
     b.addEventListener("click", () => openReportMessageModal(b.dataset.reportMsg)));
   $("#chatBody").querySelectorAll("[data-lightbox]").forEach((el) =>
@@ -2209,34 +2262,6 @@ function renderRealChat() {
   });
 
   inp.focus();
-}
-
-/* blocking is restricted server-side (block_user() checks for an active
-   order/ticket between the two users) — this just surfaces that outcome */
-function confirmBlockUser(otherId, otherName) {
-  openModal(`
-    ${modalHead("Block " + otherName + "?")}
-    <p class="row-sub" style="margin-bottom:14px">They won't be able to reach you here anymore. Your existing conversation stays exactly as it is — nothing is deleted.</p>
-    <button class="btn btn-primary btn-block" id="blockGo">Block user</button>
-    <button class="btn btn-ghost btn-block" data-close style="margin-top:8px">Cancel</button>
-  `);
-  $("#blockGo").addEventListener("click", async () => {
-    const btn = $("#blockGo");
-    btn.disabled = true; btn.textContent = "Blocking…";
-    const { error } = await sbBlockUser(otherId);
-    if (error) {
-      closeModal();
-      if (error.message.includes("ACTIVE_TRANSACTION")) {
-        toast("You can't block someone with an active order/transaction with you.");
-      } else {
-        toast("Couldn't block user: " + error.message);
-      }
-      return;
-    }
-    closeModal();
-    toast(otherName + " has been blocked.");
-    hydrateBlockedUsers();
-  });
 }
 
 function openReportMessageModal(messageId) {
@@ -3394,6 +3419,10 @@ function bindScreenEvents() {
   const lfBtn = document.querySelector('[data-act="open-lf"]');
   if (lfBtn) lfBtn.addEventListener("click", showLF);
 
+  // messages inbox
+  document.querySelectorAll("[data-open-conv]").forEach((b) =>
+    b.addEventListener("click", () => openChat(b.dataset.openConv, b.dataset.openConvName)));
+
   // market
   const search = $("#searchInput");
   if (search) {
@@ -3528,7 +3557,8 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       await hydrateEvents();
       await hydratePayoutAccount();
       await hydrateFees();
-      await hydrateBlockedUsers();
+      await hydrateConversations();
+      startMyMessagesWatch();
       return;
     }
   }

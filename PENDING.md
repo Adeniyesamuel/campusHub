@@ -96,6 +96,15 @@ tracked outside the migration files they were decided in.
       not. In practice a blocker never learns a post-block image's path through the app
       UI, since the `messages` row pointing to it is already hidden from them. Revisit
       if stronger storage-level enforcement is ever needed.
+- [ ] **User blocking is built server-side but not reachable from the UI.** The
+      `blocks` table, `has_active_transaction()`/`block_user()` RPCs, and the
+      block-aware `messages` select policy (all migration 0009) are fully intact and
+      live-tested — but the chat header's block button and the Settings
+      "Blocked users" list were removed, along with their `js/supabase.js` wrappers
+      (`sbBlockUser`/`sbUnblockUser`/`sbGetMyBlocks`), in favor of shipping the
+      Messages inbox first. "Report message" is unaffected and still fully wired up.
+      To re-enable: re-add the wrappers and the two UI entry points — no DB changes
+      needed.
 
 ## Product decisions still open
 

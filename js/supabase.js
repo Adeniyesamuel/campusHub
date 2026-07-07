@@ -107,11 +107,26 @@ const sbSubscribeToConversation = (conversationId, onInsert) =>
     }, (payload) => onInsert(payload.new))
     .subscribe();
 
-/* ---------- blocking + message reports ---------- */
-const sbBlockUser = (targetUserId) => sb.rpc("block_user", { target_user_id: targetUserId });
-const sbUnblockUser = (targetUserId) => sb.from("blocks").delete().eq("blocked_id", targetUserId);
-const sbGetMyBlocks = () =>
-  sb.from("blocks").select("blocked_id, blocked:profiles!blocked_id(name)").order("created_at", { ascending: false });
+/* ---------- messages inbox ---------- */
+const sbGetMyConversations = () => sb.rpc("get_my_conversations");
+const sbMarkConversationRead = (conversationId, userId) =>
+  sb.from("conversation_reads").upsert(
+    { conversation_id: conversationId, user_id: userId, last_read_at: new Date().toISOString() },
+    { onConflict: "conversation_id,user_id" }
+  );
+// unfiltered — RLS on messages already scopes delivery to conversations
+// the caller participates in, so this is a live feed of "any new message
+// anywhere that's mine to see," used to keep the inbox/badge up to date
+// without a chat panel open
+const sbSubscribeToMyMessages = (onInsert) =>
+  sb.channel("my-messages")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => onInsert(payload.new))
+    .subscribe();
+
+/* ---------- message reports ----------
+   (user blocking is deliberately not wired up client-side right now —
+   see PENDING.md "Known accepted limitations"; the block_user() RPC and
+   blocks table still exist server-side, untouched, for future use) */
 // reporter_id / reported_user_id / message_text are filled in server-side
 // by a trigger from the real message row — never trust the client for those
 const sbReportMessage = (messageId, reason) =>
