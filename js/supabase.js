@@ -69,6 +69,19 @@ const sbUpsertSubmission = (assignmentId, studentId, filePath) =>
     { onConflict: "assignment_id,student_id" }
   );
 
+/* ---------- polls ---------- */
+const sbGetPolls = (level, dept) =>
+  sb.from("polls").select("*, poll_options(*)").eq("level", level).eq("dept", dept).order("created_at", { ascending: false });
+const sbInsertPoll = (row) => sb.from("polls").insert(row).select().single();
+const sbInsertPollOptions = (rows) => sb.from("poll_options").insert(rows);
+const sbGetPollResults = (pollId) => sb.rpc("get_poll_results", { p_poll_id: pollId });
+const sbGetMyVotes = (userId) => sb.from("poll_votes").select("poll_id, option_id").eq("user_id", userId);
+const sbVote = (pollId, optionId, userId) =>
+  sb.from("poll_votes").upsert(
+    { poll_id: pollId, option_id: optionId, user_id: userId },
+    { onConflict: "poll_id,user_id" }
+  );
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);

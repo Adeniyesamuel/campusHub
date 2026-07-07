@@ -65,9 +65,7 @@ const state = {
     timetable: [],     // loaded from Supabase after login — see hydrateClassInfo()
     exams: [],         // loaded from Supabase after login — see hydrateClassInfo()
     assignments: [], // loaded from Supabase after login — see hydrateClassInfo()
-    polls: [
-      { id: 1, q: "Should we move tomorrow's CSC 201 class from 10am to 2pm?", options: [ { label: "Yes, move it", votes: 34 }, { label: "No, keep 10am", votes: 21 } ], voted: null },
-    ],
+    polls: [], // loaded from Supabase after login — see hydrateClassInfo()
     attendance: [
       { course: "CSC 201", present: 10, total: 12 },
       { course: "MTH 201", present: 8, total: 12 },
@@ -563,6 +561,18 @@ async function hydrateClassInfo() {
       submitted: !!sub, file: sub ? sub.file_path.split("/").pop() : null,
     };
   });
+
+  const { data: pollRows } = await sbGetPolls(level, dept);
+  const { data: myVoteRows } = await sbGetMyVotes(state.user.id);
+  const myVoteByPoll = new Map((myVoteRows || []).map((v) => [v.poll_id, v.option_id]));
+  state.classroom.polls = await Promise.all((pollRows || []).map(async (p) => {
+    const { data: results } = await sbGetPollResults(p.id);
+    const countByOption = new Map((results || []).map((r) => [r.option_id, Number(r.votes)]));
+    const options = (p.poll_options || [])
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((o) => ({ id: o.id, label: o.label, votes: countByOption.get(o.id) || 0 }));
+    return { id: p.id, q: p.question, options, voted: myVoteByPoll.get(p.id) || null };
+  }));
 }
 
 /* loads the public marketplace feed for everyone, plus the vendor's own
@@ -1510,17 +1520,17 @@ function classTabHTML() {
         : `<button class="btn btn-accent btn-sm" data-submit="${a.id}">Submit</button>`}
     </div>`).join("") : `<div class="empty">No assignments yet</div>`;
 
-  const polls = cr.polls.map((p) => {
+  const polls = cr.polls.length ? cr.polls.map((p) => {
     const total = p.options.reduce((s, o) => s + o.votes, 0) || 1;
-    const opts = p.options.map((o, i) => {
+    const opts = p.options.map((o) => {
       const pct = Math.round((o.votes / total) * 100);
       if (p.voted === null) {
-        return `<button class="poll-opt" data-poll="${p.id}" data-opt="${i}">${esc(o.label)}</button>`;
+        return `<button class="poll-opt" data-poll="${p.id}" data-opt="${o.id}">${esc(o.label)}</button>`;
       }
       return `
-        <div class="poll-result ${p.voted === i ? "mine" : ""}">
+        <div class="poll-result ${p.voted === o.id ? "mine" : ""}">
           <div class="poll-bar" style="width:${pct}%"></div>
-          <span>${esc(o.label)}${p.voted === i ? " ✓" : ""}</span><b>${pct}%</b>
+          <span>${esc(o.label)}${p.voted === o.id ? " ✓" : ""}</span><b>${pct}%</b>
         </div>`;
     }).join("");
     return `
@@ -1529,7 +1539,7 @@ function classTabHTML() {
         <div class="poll-opts">${opts}</div>
         <div class="row-sub" style="margin-top:8px">${total} vote${total !== 1 ? "s" : ""}${p.voted !== null ? " · you voted" : ""}</div>
       </div>`;
-  }).join("");
+  }).join("") : `<div class="empty">No polls yet</div>`;
 
   const att = cr.attendance.map((a) => {
     const pct = Math.round((a.present / a.total) * 100);
@@ -1567,7 +1577,10 @@ function classTabHTML() {
           <button class="btn btn-ghost btn-sm" data-act="add-assignment">＋ Add</button>
         </div>
         ${assigns}
-        <div class="section-head"><div><div class="eyebrow">Class decisions</div><h3 class="h3">Polls</h3></div></div>
+        <div class="section-head">
+          <div><div class="eyebrow">Class decisions</div><h3 class="h3">Polls</h3></div>
+          <button class="btn btn-ghost btn-sm" data-act="add-poll">＋ Add</button>
+        </div>
         ${polls}
         <div class="section-head"><div><div class="eyebrow">Your attendance</div><h3 class="h3">Attendance</h3></div></div>
         ${att}
@@ -1817,11 +1830,15 @@ function bindStudyEvents() {
 
   const addAssignBtn = document.querySelector('[data-act="add-assignment"]');
   if (addAssignBtn) addAssignBtn.addEventListener("click", showAssignmentForm);
+
+  const addPollBtn = document.querySelector('[data-act="add-poll"]');
+  if (addPollBtn) addPollBtn.addEventListener("click", showPollForm);
   document.querySelectorAll("[data-poll]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const poll = state.classroom.polls.find((p) => p.id === Number(b.dataset.poll));
-      poll.options[Number(b.dataset.opt)].votes++;
-      poll.voted = Number(b.dataset.opt);
+    b.addEventListener("click", async () => {
+      const pollId = b.dataset.poll, optionId = b.dataset.opt;
+      const { error } = await sbVote(pollId, optionId, state.user.id);
+      if (error) return toast("Couldn't record vote: " + error.message);
+      await hydrateClassInfo();
       render(); toast("Vote recorded 🗳️");
     }));
   document.querySelectorAll("[data-mat-jump]").forEach((b) =>
@@ -1973,6 +1990,39 @@ function showAssignmentSubmit(id) {
     if (error) { go.disabled = false; go.textContent = "Submit"; return toast("Couldn't submit: " + error.message); }
     await hydrateClassInfo();
     closeModal(); render(); toast("Assignment submitted ✅");
+  });
+}
+
+/* --- create a poll (question + options), immutable once posted --- */
+function showPollForm() {
+  let optionCount = 2;
+  const renderOptions = () => Array.from({ length: optionCount }, (_, i) =>
+    `<input class="input poll-opt-input" placeholder="Option ${i + 1}" />`).join("");
+  openModal(`
+    ${modalHead("Create a poll")}
+    <input id="pollQ" class="input" placeholder="Ask your class something…" />
+    <div id="pollOptsWrap">${renderOptions()}</div>
+    <button class="btn btn-ghost btn-sm" id="pollAddOpt" style="margin-bottom:10px">＋ Add option</button>
+    <button class="btn btn-primary btn-block" id="pollGo">Post poll</button>
+  `);
+  $("#pollAddOpt").addEventListener("click", () => {
+    const existing = [...document.querySelectorAll(".poll-opt-input")].map((i) => i.value);
+    optionCount++;
+    $("#pollOptsWrap").innerHTML = renderOptions();
+    [...document.querySelectorAll(".poll-opt-input")].forEach((inp, i) => { inp.value = existing[i] || ""; });
+  });
+  $("#pollGo").addEventListener("click", async () => {
+    const question = $("#pollQ").value.trim();
+    const labels = [...document.querySelectorAll(".poll-opt-input")].map((i) => i.value.trim()).filter(Boolean);
+    if (!question || labels.length < 2) return toast("Add a question and at least 2 options");
+    const btn = $("#pollGo");
+    btn.disabled = true; btn.textContent = "Posting…";
+    const { data: poll, error } = await sbInsertPoll({ level: state.user.level, dept: state.user.dept, question, created_by: state.user.id });
+    if (error) { btn.disabled = false; btn.textContent = "Post poll"; return toast("Couldn't post: " + error.message); }
+    const { error: optErr } = await sbInsertPollOptions(labels.map((label, i) => ({ poll_id: poll.id, label, sort_order: i })));
+    if (optErr) { btn.disabled = false; btn.textContent = "Post poll"; return toast("Couldn't add options: " + optErr.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast("Poll posted");
   });
 }
 
