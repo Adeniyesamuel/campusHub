@@ -2486,15 +2486,20 @@ function showScanTicket() {
   $("#scanGo").addEventListener("click", () => verify($("#scanCode").value));
   $("#scanCode").addEventListener("keydown", (e) => { if (e.key === "Enter") verify($("#scanCode").value); });
 
-  // optional camera scanning via the browser's native BarcodeDetector —
-  // manual code entry above always works regardless of browser support
+  // camera scanning: the browser's native BarcodeDetector where available
+  // (Chrome/Edge/Android), falling back to jsQR (canvas frame decoding)
+  // everywhere else — that covers Brave, Safari, and iPhones, which don't
+  // implement BarcodeDetector. Manual code entry above always works
+  // regardless of browser support.
   let scanning = false, stream = null;
   const stopCamera = () => {
     scanning = false;
     if (stream) { stream.getTracks().forEach((tr) => tr.stop()); stream = null; }
   };
   $("#scanCamBtn").addEventListener("click", async () => {
-    if (!("BarcodeDetector" in window)) {
+    const useBarcodeDetector = "BarcodeDetector" in window;
+    const useJsQR = !useBarcodeDetector && typeof jsQR === "function";
+    if (!useBarcodeDetector && !useJsQR) {
       return toast("Camera scanning isn't supported in this browser — enter the code manually");
     }
     const wrap = $("#scanCamWrap");
@@ -2509,19 +2514,42 @@ function showScanTicket() {
     await video.play();
     wrap.classList.remove("hidden");
     scanning = true;
-    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+
+    // detectFrame() resolves to a decoded string, or null if nothing found
+    // in the current frame — the loop below is shared by both methods
+    let detectFrame;
+    if (useBarcodeDetector) {
+      const detector = new BarcodeDetector({ formats: ["qr_code"] });
+      detectFrame = async () => {
+        try {
+          const codes = await detector.detect(video);
+          return codes.length ? codes[0].rawValue : null;
+        } catch (e) { return null; }
+      };
+    } else {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      detectFrame = async () => {
+        if (video.readyState !== video.HAVE_ENOUGH_DATA) return null;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+        return result ? result.data : null;
+      };
+    }
+
     const loop = async () => {
       if (!scanning) return;
-      try {
-        const codes = await detector.detect(video);
-        if (codes.length) {
-          stopCamera();
-          wrap.classList.add("hidden");
-          $("#scanCode").value = codes[0].rawValue;
-          verify(codes[0].rawValue);
-          return;
-        }
-      } catch (e) { /* keep trying next frame */ }
+      const value = await detectFrame();
+      if (value) {
+        stopCamera();
+        wrap.classList.add("hidden");
+        $("#scanCode").value = value;
+        verify(value);
+        return;
+      }
       requestAnimationFrame(loop);
     };
     loop();
