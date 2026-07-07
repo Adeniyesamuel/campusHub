@@ -22,6 +22,16 @@ const sbSignIn = (email, password) => sb.auth.signInWithPassword({ email, passwo
 const sbSignOut = () => sb.auth.signOut();
 const sbGetSession = async () => (await sb.auth.getSession()).data.session;
 
+/* ---------- campus feed ---------- */
+const sbGetFeed = () =>
+  sb.from("feed_posts").select("*, author:profiles!author_id(name, role, vendor_type)").order("created_at", { ascending: false });
+const sbInsertFeedPost = (row) => sb.from("feed_posts").insert(row);
+
+/* ---------- lost & found ---------- */
+const sbGetLostFound = () =>
+  sb.from("lost_found_reports").select("*, reporter:profiles!reporter_id(name)").order("created_at", { ascending: false });
+const sbInsertLostFound = (row) => sb.from("lost_found_reports").insert(row);
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);

@@ -42,22 +42,12 @@ const state = {
   cats: ["All", "Electronics", "Books", "Hostel Items", "Fashion & Beauty", "Food", "Services"],
   events: [], // loaded from Supabase after login — see hydrateEvents()
   tickets: [], // the logged-in user's own paid tickets — see hydrateEvents()
-  feed: [
-    { id: 1, who: "Student Affairs", tag: "Official", aud: "General", time: "9:12 AM", text: "GST exam timetable has been revised. New timetable is now on departmental notice boards. Check before Friday." },
-    { id: 2, who: "CSC Class Rep", tag: "Class", aud: "Computer Science", time: "8:40 AM", text: "CSC 201 lecture moved from LT2 to CITS Hall for today only. 12pm sharp." },
-    { id: 3, who: "100L Coordinator", tag: "Class", aud: "100 Level", time: "8:05 AM", text: "All 100 level students: course registration closes this Friday. See your level adviser if you have issues." },
-    { id: 4, who: "Health Centre", tag: "Official", aud: "General", time: "Yesterday", text: "Free malaria testing continues at the medical centre this week, 9am–3pm daily." },
-  ],
-  lost: [
-    { id: 1, type: "lost", item: "Blue ID card wallet", where: "Around the library steps", who: "Femi O.", time: "Today, 10:05 AM" },
-    { id: 2, type: "found", item: "Silver wristwatch", where: "LT1, back row", who: "Zainab A.", time: "Yesterday" },
-  ],
+  feed: [], // loaded from Supabase after login — see hydrateFeed()
+  lost: [],  // loaded from Supabase after login — see hydrateLostFound()
   products: [], // vendor's own inventory — loaded from Supabase, see hydrateMarketplace()
   sales: [],    // vendor's own sale ledger — loaded from Supabase
-  chats: {},          // demo mode only: { "Name": [ {from:"me"|"them", text, time} ] }
-  chatWith: null,     // demo mode only: name of the person the chat panel is open with
-  realChatWith: null, // real mode: { id, name, conversationId } once a real chat is open
-  chatMessages: [],   // real mode: messages for the currently open conversation
+  realChatWith: null, // { id, name, conversationId } once a chat panel is open
+  chatMessages: [],   // messages for the currently open conversation
   conversations: [],  // Messages inbox — loaded by hydrateConversations()
   unreadTotal: 0,     // sum of unread counts across all conversations
 
@@ -526,6 +516,38 @@ const mapSaleRow = (row) => {
   return { id: row.id, name: p ? p.name : "Product", qty: row.qty, total: row.total, profit: row.profit, time: fmtRowTime(row.created_at) };
 };
 
+// audience_type/audience_value (RLS-enforced) -> the single "aud" string
+// the rendering/filter code already works with ("General", a level, or a
+// department) — General/level/department map 1:1 onto myChannels()
+const mapFeedRow = (row) => ({
+  id: row.id,
+  who: row.author?.name || "Someone",
+  tag: row.author?.role === "vendor" && row.author?.vendor_type !== "student" ? "Vendor" : "Student",
+  aud: row.audience_type === "general" ? "General" : row.audience_value,
+  time: fmtRowTime(row.created_at),
+  text: row.text,
+});
+
+const mapLostFoundRow = (row) => ({
+  id: row.id,
+  reporterId: row.reporter_id,
+  type: row.type,
+  item: row.item,
+  where: row.location,
+  who: row.reporter?.name || "Someone",
+  time: fmtRowTime(row.created_at),
+});
+
+async function hydrateFeed() {
+  const { data } = await sbGetFeed();
+  state.feed = (data || []).map(mapFeedRow);
+}
+
+async function hydrateLostFound() {
+  const { data } = await sbGetLostFound();
+  state.lost = (data || []).map(mapLostFoundRow);
+}
+
 /* loads the public marketplace feed for everyone, plus the vendor's own
    inventory/orders/sales/shop stats if the logged-in user is a vendor */
 async function hydrateMarketplace() {
@@ -739,6 +761,8 @@ async function completeAuth(via) {
   let msg = (state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who;
   if (payoutOutcome === "failed") msg += " — payout setup didn't go through, add it later in Settings";
   toast(msg);
+  await hydrateFeed();
+  await hydrateLostFound();
   await hydrateMarketplace();
   await hydrateEvents();
   await hydratePayoutAccount();
@@ -1055,7 +1079,7 @@ function homeScreen() {
         <div class="lf-meta">📍 ${esc(l.where)}</div>
         <div class="lf-sub">${esc(l.who)} · ${esc(l.time)}</div>
       </div>
-      <button class="lf-contact" data-act="lf-contact" data-who="${esc(l.who)}">Contact</button>
+      ${l.reporterId === state.user.id ? "" : `<button class="lf-contact" data-act="lf-contact" data-reporter-id="${l.reporterId}" data-reporter-name="${esc(l.who)}">Contact</button>`}
     </div>`).join("");
 
   return `
@@ -2047,22 +2071,10 @@ function closeModal() { $("#modalRoot").innerHTML = ""; }
 
 /* ==========================================================
    LIVE CHAT
-   Real, persisted + real-time chat wherever a real counterparty profile
-   id is available (marketplace, storefronts, vendor orders). Falls back
-   to the old simulated canned-reply mode when only a display name is
-   available (Lost & Found — reporters aren't tied to real profiles yet,
-   that's its own pending backend pass).
+   Real, persisted + real-time chat, keyed by the real counterparty
+   profile id (marketplace, storefronts, vendor orders, lost & found).
    ========================================================== */
 
-const cannedReplies = [
-  "Hello! 😊 Yes, it's still available.",
-  "You can pick it up any time after 2pm today.",
-  "Last price? Okay, I can do a small discount for you 😄",
-  "No wahala, I'll hold it for you till tomorrow.",
-  "Sure! Send me your hall and I'll deliver.",
-];
-let replyIndex = 0;
-let typingTimer = null;
 let activeChatChannel = null;
 
 const stopChatRealtime = () => {
@@ -2120,26 +2132,10 @@ function openImageLightbox(url) {
   `, true);
 }
 
-/* otherId: real counterparty profile id (real mode) — omit/null for the
-   old simulated demo mode, keyed by otherName instead */
 async function openChat(otherId, otherName) {
   stopChatRealtime();
   closeModal();
 
-  if (!otherId) {
-    // demo mode (Lost & Found only, for now)
-    state.realChatWith = null;
-    state.chatWith = otherName;
-    if (!state.chats[otherName]) {
-      state.chats[otherName] = [
-        { from: "them", text: "Hi! Thanks for reaching out 👋 How can I help?", time: timeNow() },
-      ];
-    }
-    renderChat();
-    return;
-  }
-
-  state.chatWith = null;
   state.realChatWith = { id: otherId, name: otherName || "Chat", conversationId: null };
   state.chatMessages = [];
   renderRealChat(); // show the panel immediately with an empty/loading body
@@ -2164,10 +2160,8 @@ async function openChat(otherId, otherName) {
 
 function closeChat() {
   stopChatRealtime();
-  state.chatWith = null;
   state.realChatWith = null;
   state.chatMessages = [];
-  clearTimeout(typingTimer);
   $("#chatRoot").innerHTML = "";
 }
 
@@ -2283,67 +2277,6 @@ function openReportMessageModal(messageId) {
     closeModal();
     toast("Message reported — thanks, our team will review it.");
   });
-}
-
-function renderChat(showTyping = false) {
-  const name = state.chatWith;
-  if (!name) return;
-  const msgs = state.chats[name] || [];
-
-  const bubbles = msgs.map((m) => `
-    <div class="bubble ${m.from}">
-      ${esc(m.text)}
-      <div class="bubble-time">${esc(m.time)}</div>
-    </div>`).join("");
-
-  $("#chatRoot").innerHTML = `
-    <div class="chat-panel">
-      <div class="chat-head">
-        <div class="chat-avatar">${esc(name[0])}</div>
-        <div>
-          <div class="chat-name">${esc(name)}</div>
-          <div class="chat-status">online</div>
-        </div>
-        <button class="chat-close" id="chatClose">✕</button>
-      </div>
-      <div class="chat-body" id="chatBody">
-        ${bubbles}
-        ${showTyping ? `<div class="chat-typing">${esc(name)} is typing…</div>` : ""}
-      </div>
-      <div class="chat-foot">
-        <input id="chatInput" class="input" placeholder="Type a message…" autocomplete="off" />
-        <button class="chat-send" id="chatSend">➤</button>
-      </div>
-    </div>`;
-
-  const body = $("#chatBody");
-  body.scrollTop = body.scrollHeight;
-
-  $("#chatClose").addEventListener("click", closeChat);
-  const inp = $("#chatInput");
-  const send = () => {
-    const text = inp.value.trim();
-    if (!text) return;
-    state.chats[name].push({ from: "me", text, time: timeNow() });
-    inp.value = "";
-    renderChat(true);
-    $("#chatInput").focus();
-    // simulated reply — the real build delivers actual seller messages
-    clearTimeout(typingTimer);
-    typingTimer = setTimeout(() => {
-      if (state.chatWith !== name) return;
-      state.chats[name].push({
-        from: "them",
-        text: cannedReplies[replyIndex++ % cannedReplies.length],
-        time: timeNow(),
-      });
-      renderChat();
-      $("#chatInput").focus();
-    }, 1400);
-  };
-  $("#chatSend").addEventListener("click", send);
-  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-  inp.focus();
 }
 
 /* ==========================================================
@@ -3381,14 +3314,17 @@ function showLF() {
       document.querySelectorAll(".seg-btn").forEach((x) =>
         x.classList.toggle("active", x === b));
     }));
-  $("#lfGo").addEventListener("click", () => {
+  $("#lfGo").addEventListener("click", async () => {
     const item = $("#lfItem").value.trim();
     if (!item) return toast("What's the item?");
-    state.lost.unshift({
-      id: Date.now(), type, item,
-      where: $("#lfWhere").value.trim() || "Campus",
-      who: "You", time: "Just now",
+    const btn = $("#lfGo");
+    btn.disabled = true; btn.textContent = "Posting…";
+    const { error } = await sbInsertLostFound({
+      reporter_id: state.user.id, type, item,
+      location: $("#lfWhere").value.trim() || "Campus",
     });
+    if (error) { btn.disabled = false; btn.textContent = "Post it"; return toast("Couldn't post: " + error.message); }
+    await hydrateLostFound();
     closeModal(); render(); toast("Posted to Lost & Found");
   });
 }
@@ -3400,13 +3336,17 @@ function showLF() {
 function bindScreenEvents() {
   // feed
   const postBtn = document.querySelector('[data-act="post"]');
-  if (postBtn) postBtn.addEventListener("click", () => {
+  if (postBtn) postBtn.addEventListener("click", async () => {
     const inp = $("#postInput");
     const text = inp.value.trim();
     if (!text) return;
     const aud = $("#postAud") ? $("#postAud").value : "General";
-    const tag = state.user.role === "vendor" && state.user.vendorType !== "student" ? "Vendor" : "Student";
-    state.feed.unshift({ id: Date.now(), who: "You", tag, aud, time: "Just now", text });
+    const audience_type = aud === "General" ? "general" : aud === state.user.level ? "level" : "department";
+    const audience_value = audience_type === "general" ? null : aud;
+    inp.value = "";
+    const { error } = await sbInsertFeedPost({ author_id: state.user.id, audience_type, audience_value, text });
+    if (error) return toast("Couldn't post: " + error.message);
+    await hydrateFeed();
     render(); toast("Posted to " + aud);
   });
 
@@ -3415,7 +3355,7 @@ function bindScreenEvents() {
     b.addEventListener("click", () => { state.feedFilter = b.dataset.feed; render(); }));
 
   document.querySelectorAll('[data-act="lf-contact"]').forEach((b) =>
-    b.addEventListener("click", () => openChat(null, b.dataset.who)));
+    b.addEventListener("click", () => openChat(b.dataset.reporterId, b.dataset.reporterName)));
   const lfBtn = document.querySelector('[data-act="open-lf"]');
   if (lfBtn) lfBtn.addEventListener("click", showLF);
 
@@ -3553,6 +3493,8 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       }
       hydrateUser(profileRow, businessRow, "session");
       render();
+      await hydrateFeed();
+      await hydrateLostFound();
       await hydrateMarketplace();
       await hydrateEvents();
       await hydratePayoutAccount();

@@ -17,6 +17,18 @@ checklist, not a historical record.
 - [ ] **Terms of Service + Privacy Policy pages.** The signup screen already links to
       "Terms of Service", "Privacy Policy", and "Cookie Use" — none of these pages
       exist yet.
+- [ ] **Admin panel.** Accessible only to your account, enforced server-side (an
+      `is_admin` flag or your user ID checked in RLS/RPCs — not just a hidden client
+      route, which anyone could reach directly). Two sections:
+      1. **Vendor verification queue** — pending `businesses` rows with Verify/Reject
+         actions, replacing the current by-hand SQL Editor flow.
+      2. **Message reports inbox** — `message_reports` rows newest-first, showing the
+         reported message text, reporter, reported user, and timestamp, with at least
+         a "mark reviewed" action.
+      Must exist before real users are onboarded — reports filed via "Report message"
+      currently land in a table nobody can see (no select policy is granted to any
+      client role by design; today only you, via the SQL Editor, can read them at
+      all).
 
 ## From the original plan — not yet started
 
@@ -78,10 +90,6 @@ The original **Phase 5 (Study hub)** is still fully pending. The original **Phas
 - [ ] **Profile photo upload UI.** The `avatars` storage bucket has existed since
       migration 0001 (Phase 1) with public-read/own-folder-upload policies already in
       place — no screen anywhere actually uses it to upload or display a photo.
-- [ ] **Admin view for approving vendor verification.** `businesses.verified` can only
-      be flipped by hand via the Supabase SQL Editor right now (by design, per the
-      Phase 1 trigger that blocks vendors from self-verifying) — there's no admin UI
-      for reviewing and approving pending vendors.
 
 ## Known accepted limitations
 
