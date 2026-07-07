@@ -23,11 +23,14 @@ checklist, not a historical record.
 The original plan numbered five phases: Auth, Marketplace, Events/Tickets, Chat, Study
 hub. What actually shipped as "Phase 4" was marketplace/event payments via Paystack
 subaccounts — an unplanned addition that came out of the marketplace/ticketing work.
-The original **Phase 4 (Chat)** and **Phase 5 (Study hub)** are both still fully pending:
+The original **Phase 5 (Study hub)** is still fully pending. The original **Phase 4
+(Chat)** has since shipped (see below) — only **Phase 5** remains here:
 
-- [ ] **Chat backend** — `openChat`/`renderChat` still run entirely on an in-memory
-      `state.chats` object with a `cannedReplies` round-robin (no real messaging).
-      Needs `conversations` + `messages` tables and real persistence.
+- [x] **Chat backend** — real `conversations`/`messages` tables with Realtime delivery
+      (migration 0008), plus restricted user blocking and message reporting (migration
+      0009) and image sharing (migration 0010). The old in-memory `state.chats` +
+      `cannedReplies` simulation is kept only as the Lost & Found fallback, since
+      reporters there aren't tied to real profiles yet (see below).
 - [ ] **Study hub backend** — classroom announcements, timetable, exams, assignments,
       polls, attendance, and materials are all hardcoded demo data in `state`, with no
       hydrate function and no Supabase read/write at all.
@@ -79,6 +82,20 @@ The original **Phase 4 (Chat)** and **Phase 5 (Study hub)** are both still fully
       be flipped by hand via the Supabase SQL Editor right now (by design, per the
       Phase 1 trigger that blocks vendors from self-verifying) — there's no admin UI
       for reviewing and approving pending vendors.
+
+## Known accepted limitations
+
+Deliberate tradeoffs made and accepted, not bugs to fix — listed here so they're
+tracked outside the migration files they were decided in.
+
+- [ ] **`chat-images` storage bucket RLS checks conversation participancy only, not
+      block status** (migration 0010). The `messages` table's select policy (migration
+      0009) hides a blocked sender's messages sent after the block, including any that
+      reference an image — but the underlying storage object itself is still
+      downloadable by any participant who has (or guesses) its exact path, blocked or
+      not. In practice a blocker never learns a post-block image's path through the app
+      UI, since the `messages` row pointing to it is already hidden from them. Revisit
+      if stronger storage-level enforcement is ever needed.
 
 ## Product decisions still open
 

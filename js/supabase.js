@@ -90,3 +90,38 @@ const sbInitMarketplacePayment = (listingId, qty) =>
   sb.functions.invoke("init-marketplace-payment", { body: { listing_id: listingId, qty } });
 const sbConfirmMarketplacePayment = (orderId) =>
   sb.functions.invoke("confirm-marketplace-payment", { body: { order_id: orderId } });
+
+/* ---------- chat (real-time, conversations + messages) ---------- */
+const sbGetOrCreateConversation = (otherUserId) =>
+  sb.rpc("get_or_create_conversation", { other_user_id: otherUserId });
+const sbGetMessages = (conversationId) =>
+  sb.from("messages").select().eq("conversation_id", conversationId).order("created_at", { ascending: true });
+const sbSendMessage = (row) => sb.from("messages").insert(row).select().single();
+// caller owns the returned channel and must sb.removeChannel(channel) when
+// the chat panel closes or switches conversations, or events keep piling up
+const sbSubscribeToConversation = (conversationId, onInsert) =>
+  sb.channel("messages-" + conversationId)
+    .on("postgres_changes", {
+      event: "INSERT", schema: "public", table: "messages",
+      filter: `conversation_id=eq.${conversationId}`,
+    }, (payload) => onInsert(payload.new))
+    .subscribe();
+
+/* ---------- blocking + message reports ---------- */
+const sbBlockUser = (targetUserId) => sb.rpc("block_user", { target_user_id: targetUserId });
+const sbUnblockUser = (targetUserId) => sb.from("blocks").delete().eq("blocked_id", targetUserId);
+const sbGetMyBlocks = () =>
+  sb.from("blocks").select("blocked_id, blocked:profiles!blocked_id(name)").order("created_at", { ascending: false });
+// reporter_id / reported_user_id / message_text are filled in server-side
+// by a trigger from the real message row — never trust the client for those
+const sbReportMessage = (messageId, reason) =>
+  sb.from("message_reports").insert({ message_id: messageId, reason: reason || null });
+
+/* ---------- chat images (private bucket, participants only) ---------- */
+// path convention: {conversationId}/{uuid}.jpg — the folder IS the
+// conversation id, which is what the bucket's RLS policies key off
+const sbUploadChatImage = (conversationId, blob) => {
+  const path = `${conversationId}/${crypto.randomUUID()}.jpg`;
+  return sb.storage.from("chat-images").upload(path, blob, { contentType: "image/jpeg" }).then(({ error }) => ({ path, error }));
+};
+const sbGetChatImageUrl = (path) => sb.storage.from("chat-images").createSignedUrl(path, 3600);

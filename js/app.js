@@ -54,8 +54,10 @@ const state = {
   ],
   products: [], // vendor's own inventory — loaded from Supabase, see hydrateMarketplace()
   sales: [],    // vendor's own sale ledger — loaded from Supabase
-  chats: {},          // { "Seller Name": [ {from:"me"|"them", text, time} ] }
-  chatWith: null,     // name of the person the chat panel is open with
+  chats: {},          // demo mode only: { "Name": [ {from:"me"|"them", text, time} ] }
+  chatWith: null,     // demo mode only: name of the person the chat panel is open with
+  realChatWith: null, // real mode: { id, name, conversationId } once a real chat is open
+  chatMessages: [],   // real mode: messages for the currently open conversation
 
   /* ---- The logged-in vendor's own shop ---- */
   myShop: { followers: 0, reviews: [], orders: [] },
@@ -63,6 +65,7 @@ const state = {
   // sane defaults matching platform_fees seed data — overwritten by
   // hydrateFees() as soon as we can reach the database
   fees: { events: { percent: 5, min_fee: 0 }, marketplace: { percent: 2.5, min_fee: 100 } },
+  blockedUsers: [], // [{ id, name }] — loaded by hydrateBlockedUsers()
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
@@ -511,7 +514,7 @@ const mapProductRow = (row) => ({
 });
 
 const mapOrderRow = (row) => ({
-  id: row.id, pid: row.product_id, buyer: row.buyer?.name || "Buyer",
+  id: row.id, pid: row.product_id, buyer: row.buyer?.name || "Buyer", buyerId: row.buyer_id,
   qty: row.qty, status: row.status, paymentStatus: row.payment_status,
   time: fmtRowTime(row.created_at),
 });
@@ -610,6 +613,12 @@ async function hydratePayoutAccount() {
     : null;
 }
 
+/* loads who the logged-in user has blocked, so Settings can list/undo them */
+async function hydrateBlockedUsers() {
+  const { data } = await sbGetMyBlocks();
+  state.blockedUsers = (data || []).map((r) => ({ id: r.blocked_id, name: (r.blocked && r.blocked.name) || "Unknown" }));
+}
+
 async function completeAuth(via) {
   const email = state.authId;
   const password = $("#authPw") ? $("#authPw").value : "";
@@ -694,6 +703,7 @@ async function completeAuth(via) {
   await hydrateEvents();
   await hydratePayoutAccount();
   await hydrateFees();
+  await hydrateBlockedUsers();
 }
 
 function bindAuthEvents() {
@@ -1217,7 +1227,7 @@ function shopScreen() {
         </div>
         ${o.status === "new"
           ? `<div style="display:flex;gap:6px">
-               <button class="btn btn-ghost btn-sm" data-chat-buyer="${esc(o.buyer)}">💬</button>
+               <button class="btn btn-ghost btn-sm" data-chat-buyer="${o.buyerId}" data-chat-buyer-name="${esc(o.buyer)}">💬</button>
                <button class="btn btn-accent btn-sm" data-complete="${o.id}">Complete</button>
              </div>`
           : `<span class="stock-pill stock-ok">Completed</span>`}
@@ -1794,6 +1804,15 @@ function showSettings() {
       `}
     </div>
 
+    <div class="set-group">Blocked users</div>
+    <div class="card" id="blockedUsersCard">
+      ${state.blockedUsers.length === 0 ? `<p class="row-sub">You haven't blocked anyone.</p>` : state.blockedUsers.map((b) => `
+        <div class="row-item">
+          <div class="row-main"><div class="row-title">${esc(b.name)}</div></div>
+          <button class="btn btn-ghost btn-sm" data-unblock="${b.id}">Unblock</button>
+        </div>`).join("")}
+    </div>
+
     <div class="set-group">Account</div>
     <div class="card" style="display:grid;gap:8px">
       <button class="btn btn-ghost" id="setPw">🔒 Change password</button>
@@ -1838,6 +1857,17 @@ function showSettings() {
 
   const payoutBtn = $("#setPayout");
   if (payoutBtn) payoutBtn.addEventListener("click", () => { closeModal(); showPayoutForm(); });
+
+  document.querySelectorAll("[data-unblock]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const id = b.dataset.unblock;
+      b.disabled = true; b.textContent = "…";
+      const { error } = await sbUnblockUser(id);
+      if (error) { b.disabled = false; b.textContent = "Unblock"; return toast("Couldn't unblock: " + error.message); }
+      state.blockedUsers = state.blockedUsers.filter((x) => x.id !== id);
+      closeModal(); showSettings();
+      toast("Unblocked.");
+    }));
 
   $("#setPw").addEventListener("click", () => toast("Password change comes with the real accounts system"));
   let notif = true;
@@ -1963,7 +1993,12 @@ function openModal(html, wide = false) {
 function closeModal() { $("#modalRoot").innerHTML = ""; }
 
 /* ==========================================================
-   LIVE CHAT (demo — real build uses websockets / Firebase)
+   LIVE CHAT
+   Real, persisted + real-time chat wherever a real counterparty profile
+   id is available (marketplace, storefronts, vendor orders). Falls back
+   to the old simulated canned-reply mode when only a display name is
+   available (Lost & Found — reporters aren't tied to real profiles yet,
+   that's its own pending backend pass).
    ========================================================== */
 
 const cannedReplies = [
@@ -1975,22 +2010,254 @@ const cannedReplies = [
 ];
 let replyIndex = 0;
 let typingTimer = null;
+let activeChatChannel = null;
 
-function openChat(name) {
-  state.chatWith = name;
-  if (!state.chats[name]) {
-    state.chats[name] = [
-      { from: "them", text: "Hi! Thanks for reaching out 👋 How can I help?", time: timeNow() },
-    ];
-  }
+const stopChatRealtime = () => {
+  if (activeChatChannel) { sb.removeChannel(activeChatChannel); activeChatChannel = null; }
+};
+
+const mapMessageRow = (row) => ({
+  id: row.id,
+  senderId: row.sender_id,
+  from: row.sender_id === state.user.id ? "me" : "them",
+  text: row.text,
+  imagePath: row.image_path,
+  time: fmtRowTime(row.created_at),
+});
+
+// signed URLs for the private chat-images bucket, cached by path since
+// they're valid for an hour and re-fetching on every render is wasteful
+const chatImageUrlCache = new Map();
+function resolveChatImageUrl(path, onReady) {
+  if (chatImageUrlCache.has(path)) return chatImageUrlCache.get(path);
+  sbGetChatImageUrl(path).then(({ data, error }) => {
+    if (error || !data) return;
+    chatImageUrlCache.set(path, data.signedUrl);
+    onReady();
+  });
+  return null;
+}
+
+// resizes to at most maxDim on the longest side and re-encodes as JPEG,
+// so chat images don't upload at full camera resolution
+function compressImageToBlob(file, maxDim = 1200, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) { height = Math.round((height * maxDim) / width); width = maxDim; }
+        else { width = Math.round((width * maxDim) / height); height = maxDim; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(img.src);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Compression failed"))), "image/jpeg", quality);
+    };
+    img.onerror = () => reject(new Error("Couldn't read that image"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function openImageLightbox(url) {
+  openModal(`
+    <div style="text-align:right;margin-bottom:8px"><button class="btn btn-ghost btn-sm" data-close>✕ Close</button></div>
+    <img src="${esc(url)}" style="max-width:100%;border-radius:12px;display:block;margin:0 auto" alt="Full size image" />
+  `, true);
+}
+
+/* otherId: real counterparty profile id (real mode) — omit/null for the
+   old simulated demo mode, keyed by otherName instead */
+async function openChat(otherId, otherName) {
+  stopChatRealtime();
   closeModal();
-  renderChat();
+
+  if (!otherId) {
+    // demo mode (Lost & Found only, for now)
+    state.realChatWith = null;
+    state.chatWith = otherName;
+    if (!state.chats[otherName]) {
+      state.chats[otherName] = [
+        { from: "them", text: "Hi! Thanks for reaching out 👋 How can I help?", time: timeNow() },
+      ];
+    }
+    renderChat();
+    return;
+  }
+
+  state.chatWith = null;
+  state.realChatWith = { id: otherId, name: otherName || "Chat", conversationId: null };
+  state.chatMessages = [];
+  renderRealChat(); // show the panel immediately with an empty/loading body
+
+  const { data: conversationId, error: convErr } = await sbGetOrCreateConversation(otherId);
+  if (convErr) { closeChat(); return toast("Couldn't open chat: " + convErr.message); }
+  if (!state.realChatWith || state.realChatWith.id !== otherId) return; // closed/switched while awaiting
+  state.realChatWith.conversationId = conversationId;
+
+  const { data: msgs, error: msgsErr } = await sbGetMessages(conversationId);
+  if (!msgsErr) state.chatMessages = (msgs || []).map(mapMessageRow);
+  renderRealChat();
+
+  activeChatChannel = sbSubscribeToConversation(conversationId, (row) => {
+    if (state.chatMessages.some((m) => m.id === row.id)) return; // our own optimistic push
+    state.chatMessages.push(mapMessageRow(row));
+    if (state.realChatWith && state.realChatWith.conversationId === conversationId) renderRealChat();
+  });
 }
 
 function closeChat() {
+  stopChatRealtime();
   state.chatWith = null;
+  state.realChatWith = null;
+  state.chatMessages = [];
   clearTimeout(typingTimer);
   $("#chatRoot").innerHTML = "";
+}
+
+function renderRealChat() {
+  const chat = state.realChatWith;
+  if (!chat) return;
+
+  const bubbles = state.chatMessages.map((m) => {
+    const reportBtn = m.from === "them" ? `<button class="bubble-report" data-report-msg="${m.id}" title="Report this message">⚑ Report</button>` : "";
+    let body;
+    if (m.imagePath) {
+      const url = resolveChatImageUrl(m.imagePath, () => {
+        if (state.realChatWith && state.realChatWith.conversationId === chat.conversationId) renderRealChat();
+      });
+      body = url
+        ? `<img src="${esc(url)}" class="bubble-img" data-lightbox="${esc(url)}" alt="Shared image" />`
+        : `<div class="bubble-img-loading">Loading image…</div>`;
+    } else {
+      body = esc(m.text);
+    }
+    return `
+    <div class="bubble ${m.from}">
+      ${body}
+      <div class="bubble-time">
+        ${esc(m.time)}
+        ${reportBtn}
+      </div>
+    </div>`;
+  }).join("");
+
+  $("#chatRoot").innerHTML = `
+    <div class="chat-panel">
+      <div class="chat-head">
+        <div class="chat-avatar">${esc(chat.name[0])}</div>
+        <div><div class="chat-name">${esc(chat.name)}</div></div>
+        <button class="chat-block" id="chatBlock" title="Block ${esc(chat.name)}">🚫</button>
+        <button class="chat-close" id="chatClose">✕</button>
+      </div>
+      <div class="chat-body" id="chatBody">
+        ${bubbles || `<div class="empty">Say hi 👋</div>`}
+      </div>
+      <div class="chat-foot">
+        <button class="chat-attach" id="chatAttach" title="Attach an image" ${chat.conversationId ? "" : "disabled"}>📎</button>
+        <input type="file" id="chatImageInput" accept="image/*" style="display:none" />
+        <input id="chatInput" class="input" placeholder="Type a message…" autocomplete="off" ${chat.conversationId ? "" : "disabled"} />
+        <button class="chat-send" id="chatSend" ${chat.conversationId ? "" : "disabled"}>➤</button>
+      </div>
+    </div>`;
+
+  const body = $("#chatBody");
+  body.scrollTop = body.scrollHeight;
+
+  $("#chatClose").addEventListener("click", closeChat);
+  $("#chatBlock").addEventListener("click", () => confirmBlockUser(chat.id, chat.name));
+  $("#chatBody").querySelectorAll("[data-report-msg]").forEach((b) =>
+    b.addEventListener("click", () => openReportMessageModal(b.dataset.reportMsg)));
+  $("#chatBody").querySelectorAll("[data-lightbox]").forEach((el) =>
+    el.addEventListener("click", () => openImageLightbox(el.dataset.lightbox)));
+
+  const inp = $("#chatInput");
+  const send = async () => {
+    const text = inp.value.trim();
+    if (!text || !chat.conversationId) return;
+    inp.value = "";
+    const { data, error } = await sbSendMessage({ conversation_id: chat.conversationId, sender_id: state.user.id, text });
+    if (error) return toast("Couldn't send: " + error.message);
+    state.chatMessages.push(mapMessageRow(data));
+    renderRealChat();
+    $("#chatInput").focus();
+  };
+  $("#chatSend").addEventListener("click", send);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+  const attachBtn = $("#chatAttach");
+  const imgInput = $("#chatImageInput");
+  attachBtn.addEventListener("click", () => imgInput.click());
+  imgInput.addEventListener("change", async () => {
+    const file = imgInput.files[0];
+    imgInput.value = "";
+    if (!file || !chat.conversationId) return;
+    attachBtn.disabled = true; attachBtn.textContent = "…";
+    try {
+      const blob = await compressImageToBlob(file);
+      const { path, error: upErr } = await sbUploadChatImage(chat.conversationId, blob);
+      if (upErr) throw upErr;
+      const { data, error } = await sbSendMessage({ conversation_id: chat.conversationId, sender_id: state.user.id, image_path: path });
+      if (error) throw error;
+      state.chatMessages.push(mapMessageRow(data));
+      renderRealChat();
+    } catch (err) {
+      toast("Couldn't send image: " + (err.message || "something went wrong"));
+      attachBtn.disabled = false; attachBtn.textContent = "📎";
+    }
+  });
+
+  inp.focus();
+}
+
+/* blocking is restricted server-side (block_user() checks for an active
+   order/ticket between the two users) — this just surfaces that outcome */
+function confirmBlockUser(otherId, otherName) {
+  openModal(`
+    ${modalHead("Block " + otherName + "?")}
+    <p class="row-sub" style="margin-bottom:14px">They won't be able to reach you here anymore. Your existing conversation stays exactly as it is — nothing is deleted.</p>
+    <button class="btn btn-primary btn-block" id="blockGo">Block user</button>
+    <button class="btn btn-ghost btn-block" data-close style="margin-top:8px">Cancel</button>
+  `);
+  $("#blockGo").addEventListener("click", async () => {
+    const btn = $("#blockGo");
+    btn.disabled = true; btn.textContent = "Blocking…";
+    const { error } = await sbBlockUser(otherId);
+    if (error) {
+      closeModal();
+      if (error.message.includes("ACTIVE_TRANSACTION")) {
+        toast("You can't block someone with an active order/transaction with you.");
+      } else {
+        toast("Couldn't block user: " + error.message);
+      }
+      return;
+    }
+    closeModal();
+    toast(otherName + " has been blocked.");
+    hydrateBlockedUsers();
+  });
+}
+
+function openReportMessageModal(messageId) {
+  openModal(`
+    ${modalHead("Report message")}
+    <p class="row-sub" style="margin-bottom:10px">Tell us what's wrong — our team will review this conversation.</p>
+    <textarea id="reportReason" class="input" rows="3" placeholder="Optional details…"></textarea>
+    <button class="btn btn-primary btn-block" id="reportGo">Submit report</button>
+  `);
+  $("#reportGo").addEventListener("click", async () => {
+    const btn = $("#reportGo");
+    btn.disabled = true; btn.textContent = "Submitting…";
+    const reason = $("#reportReason").value.trim();
+    const { error } = await sbReportMessage(messageId, reason);
+    if (error) {
+      btn.disabled = false; btn.textContent = "Submit report";
+      return toast("Couldn't submit report: " + error.message);
+    }
+    closeModal();
+    toast("Message reported — thanks, our team will review it.");
+  });
 }
 
 function renderChat(showTyping = false) {
@@ -2168,7 +2435,10 @@ async function showItem(id) {
     ${canOrder ? `<button class="btn btn-ghost btn-block" id="placeOrderBtn" style="margin-top:8px">🛒 Place order (pay seller directly)</button>` : ""}
     <button class="btn btn-primary btn-block" id="msgSeller" style="margin-top:12px">💬 Message seller</button>
   `);
-  $("#msgSeller").addEventListener("click", () => openChat(l.seller));
+  $("#msgSeller").addEventListener("click", () => {
+    if (l.sellerId === state.user.id) return toast("This is your own listing");
+    openChat(l.sellerId, l.seller);
+  });
   const vs = document.querySelector("[data-open-shop]");
   if (vs) vs.addEventListener("click", () => openShop(vs.dataset.openShop));
   const orderBtn = document.querySelector("#placeOrderBtn");
@@ -2343,7 +2613,10 @@ async function openShop(sellerId) {
     btn.disabled = false;
     toast(youFollow ? "Following " + biz.name + " 🔔" : "Unfollowed " + biz.name);
   });
-  $("#shopMsg").addEventListener("click", () => openChat(biz.name));
+  $("#shopMsg").addEventListener("click", () => {
+    if (sellerId === state.user.id) return toast("This is your own shop");
+    openChat(sellerId, biz.name);
+  });
   document.querySelectorAll("[data-shop-item]").forEach((b) =>
     b.addEventListener("click", () => showItem(b.dataset.shopItem)));
 }
@@ -3117,7 +3390,7 @@ function bindScreenEvents() {
     b.addEventListener("click", () => { state.feedFilter = b.dataset.feed; render(); }));
 
   document.querySelectorAll('[data-act="lf-contact"]').forEach((b) =>
-    b.addEventListener("click", () => openChat(b.dataset.who)));
+    b.addEventListener("click", () => openChat(null, b.dataset.who)));
   const lfBtn = document.querySelector('[data-act="open-lf"]');
   if (lfBtn) lfBtn.addEventListener("click", showLF);
 
@@ -3206,7 +3479,7 @@ function bindScreenEvents() {
       render(); toast("Order completed — sale recorded ✅");
     }));
   document.querySelectorAll("[data-chat-buyer]").forEach((b) =>
-    b.addEventListener("click", () => openChat(b.dataset.chatBuyer)));
+    b.addEventListener("click", () => openChat(b.dataset.chatBuyer, b.dataset.chatBuyerName)));
 
   // For You tiles
   document.querySelectorAll("[data-goto]").forEach((b) =>
@@ -3255,6 +3528,7 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       await hydrateEvents();
       await hydratePayoutAccount();
       await hydrateFees();
+      await hydrateBlockedUsers();
       return;
     }
   }
