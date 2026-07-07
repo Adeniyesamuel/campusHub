@@ -29,6 +29,11 @@ const state = {
   vendorType: null,    // "student" | "external"
   profile: { name: "", matric: "", level: "", dept: "" },
   business: { name: "", cat: "Food & Snacks", desc: "", phone: "", loc: "", social: "", cac: "", agreed: false },
+  // optional payout draft collected during vendor signup — the actual
+  // create-payout-account call happens post-signup (see completeAuth),
+  // since it needs an authenticated session; `pending` marks whether the
+  // vendor filled this in or clicked "Skip for now"
+  payout: { pending: false, business_name: "", bank_code: "", bank_name: "", account_number: "" },
   feedFilter: "All",
   tab: "home",
   cat: "All",
@@ -149,6 +154,7 @@ function render() {
     let screen;
     if (state.authStage === "vtype") screen = vtypeScreen();
     else if (state.authStage === "vverify") screen = vverifyScreen();
+    else if (state.authStage === "payout") screen = payoutSetupScreen();
     else if (state.authStage === "profile") screen = profileScreen();
     else if (state.authStage === "auth") screen = authScreen();
     else screen = roleScreen();
@@ -266,6 +272,34 @@ function vverifyScreen() {
         </label>
 
         <button class="continue-btn" id="vvContinue" disabled>Continue</button>
+      </div>
+    </div>`;
+}
+
+/* Step 1b(iii) — optional payout setup (both vendor types). The actual
+   Paystack call happens after signUp() completes (see completeAuth) —
+   this screen only collects the draft, so filling it in never touches
+   Paystack until an authenticated session exists. */
+function payoutSetupScreen() {
+  const p = state.payout;
+  return `
+    <div class="auth-page">
+      <div class="auth-box">
+        <button class="auth-back" data-act="payout-back">← Back</button>
+        <div class="auth-brand">
+          <div class="wordmark">Campus<span>Hub.</span></div>
+        </div>
+        <div class="auth-title">Set up payouts</div>
+        <p class="auth-sub">Get paid automatically for sales and ticket revenue, straight to your bank. You can always do this later in Settings.</p>
+
+        <input id="poSuBusinessName" class="auth-input" placeholder="Business / payout name" value="${esc(p.business_name)}" />
+        <select id="poSuBank" class="auth-input auth-select"><option value="">Loading banks…</option></select>
+        <input id="poSuAccountNumber" class="auth-input" inputmode="numeric" placeholder="10-digit account number" value="${esc(p.account_number)}" />
+
+        <button class="continue-btn" id="poSuContinue" disabled>Continue</button>
+        <p class="auth-switch">
+          <button data-act="payout-skip">Skip for now</button>
+        </p>
       </div>
     </div>`;
 }
@@ -583,6 +617,8 @@ async function completeAuth(via) {
   const busy = (label) => { if (pwGo) { pwGo.disabled = true; pwGo.textContent = label; } };
   const failed = (label, message) => { if (pwGo) { pwGo.disabled = false; pwGo.textContent = label; } toast(message); };
 
+  let payoutOutcome = null; // "created" | "failed" | null (skipped or n/a)
+
   if (state.authMode === "signup") {
     busy("Creating account…");
     const { data, error } = await sbSignUp(email, password);
@@ -611,6 +647,23 @@ async function completeAuth(via) {
       });
       if (bizErr) return failed("Create account", "Couldn't save your business info: " + bizErr.message);
       businessRow = biz;
+
+      // optional payout setup — the account already exists at this point
+      // (that's a hard requirement: create-payout-account needs a real
+      // session), so this is a best-effort attempt AFTER signup, never a
+      // blocker. Any failure here — bad bank details, Paystack hiccup,
+      // whatever — just means they finish it later in Settings.
+      if (state.payout.pending) {
+        busy("Setting up payouts…");
+        const { data: payoutData, error: payoutErr } = await sbCreatePayoutAccount({
+          business_name: state.payout.business_name,
+          bank_code: state.payout.bank_code,
+          bank_name: state.payout.bank_name,
+          account_number: state.payout.account_number,
+        });
+        payoutOutcome = (payoutErr || payoutData?.error) ? "failed" : "created";
+      }
+      state.payout = { pending: false, business_name: "", bank_code: "", bank_name: "", account_number: "" };
     }
     hydrateUser(profileRow, businessRow, via);
   } else {
@@ -634,7 +687,9 @@ async function completeAuth(via) {
   const who = state.user.role === "vendor"
     ? (state.user.vendorType === "student" ? "a student vendor" : "a campus vendor")
     : "a student";
-  toast((state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who);
+  let msg = (state.authMode === "signup" ? "Account created" : "Logged in") + " as " + who;
+  if (payoutOutcome === "failed") msg += " — payout setup didn't go through, add it later in Settings";
+  toast(msg);
   await hydrateMarketplace();
   await hydrateEvents();
   await hydratePayoutAccount();
@@ -682,13 +737,57 @@ function bindAuthEvents() {
         cac: $("#vvCac").value.trim(),
         agreed: true,
       };
-      // student vendors continue to student identity; campus vendors go to signup
-      state.authStage = state.vendorType === "student" ? "profile" : "auth";
+      // both vendor types get the option to set up payouts next
+      state.authStage = "payout";
       render();
     });
   }
   const vvBack = document.querySelector('[data-act="vv-back"]');
   if (vvBack) vvBack.addEventListener("click", () => { state.authStage = "vtype"; render(); });
+
+  // optional payout setup — collects a draft only; the actual Paystack
+  // call happens post-signup in completeAuth(), once authenticated
+  const poSuGo = $("#poSuContinue");
+  if (poSuGo) {
+    const bankSelect = $("#poSuBank");
+    (async () => {
+      const { data: bankData, error: bankErr } = await sbListBanks();
+      if (bankErr || !bankData?.banks) {
+        bankSelect.innerHTML = `<option value="">Couldn't load banks — you can add this later in Settings</option>`;
+      } else {
+        bankSelect.innerHTML = `<option value="">Choose your bank</option>` +
+          bankData.banks.map((b) => `<option value="${esc(b.code)}">${esc(b.name)}</option>`).join("");
+      }
+    })();
+
+    const check = () => {
+      const ok = $("#poSuBusinessName").value.trim() && bankSelect.value && $("#poSuAccountNumber").value.trim().length >= 10;
+      poSuGo.disabled = !ok;
+    };
+    ["#poSuBusinessName", "#poSuAccountNumber"].forEach((s) => $(s).addEventListener("input", check));
+    bankSelect.addEventListener("change", check);
+    check();
+
+    const nextStage = () => {
+      state.authStage = state.vendorType === "student" ? "profile" : "auth";
+      render();
+    };
+    poSuGo.addEventListener("click", () => {
+      if (poSuGo.disabled) return;
+      state.payout = {
+        pending: true,
+        business_name: $("#poSuBusinessName").value.trim(),
+        bank_code: bankSelect.value,
+        bank_name: bankSelect.options[bankSelect.selectedIndex].text,
+        account_number: $("#poSuAccountNumber").value.trim(),
+      };
+      nextStage();
+    });
+    const skipBtn = document.querySelector('[data-act="payout-skip"]');
+    if (skipBtn) skipBtn.addEventListener("click", () => { state.payout.pending = false; nextStage(); });
+    const payoutBack = document.querySelector('[data-act="payout-back"]');
+    if (payoutBack) payoutBack.addEventListener("click", () => { state.authStage = "vverify"; render(); });
+  }
 
   // role picker's "Log in" link jumps straight to the login screen —
   // no role/business/profile questions, since that's looked up from the account
@@ -708,10 +807,10 @@ function bindAuthEvents() {
     render();
   });
 
-  // back from profile → verification (student vendors) or role picker (students)
+  // back from profile → payout setup (student vendors) or role picker (students)
   const pfBack = document.querySelector('[data-act="profile-back"]');
   if (pfBack) pfBack.addEventListener("click", () => {
-    if (state.authRole === "vendor") { state.authStage = "vverify"; }
+    if (state.authRole === "vendor") { state.authStage = "payout"; }
     else { state.authRole = null; state.authStage = null; }
     render();
   });
@@ -1138,6 +1237,16 @@ function shopScreen() {
       <p class="post-body">${esc(r.text)}</p>
     </div>`).join("");
 
+  const payoutBanner = state.payoutAccount ? "" : `
+    <div class="card" style="border-color:var(--orange-400);display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div style="font-size:22px">🏦</div>
+      <div style="flex:1">
+        <div class="row-title">Set up payouts to get paid</div>
+        <div class="row-sub">Add your bank details so sales and ticket revenue reach you automatically.</div>
+      </div>
+      <button class="btn btn-accent btn-sm" id="shopSetPayout">Set up</button>
+    </div>`;
+
   return `
     <div class="section-head">
       <div>
@@ -1145,6 +1254,7 @@ function shopScreen() {
         <h1 class="h1">Vendor dashboard</h1>
       </div>
     </div>
+    ${payoutBanner}
 
     <div class="trust-strip">
       <div class="trust-stat"><b>👥 ${ms.followers}</b><span>followers</span></div>
@@ -3039,6 +3149,8 @@ function bindScreenEvents() {
   if (scanBtn) scanBtn.addEventListener("click", showScanTicket);
 
   // shop
+  const shopPayoutBtn = document.querySelector("#shopSetPayout");
+  if (shopPayoutBtn) shopPayoutBtn.addEventListener("click", showPayoutForm);
   const saleBtn = document.querySelector('[data-act="open-sale"]');
   if (saleBtn) saleBtn.addEventListener("click", showSale);
   const prodBtn = document.querySelector('[data-act="open-product"]');
