@@ -82,6 +82,15 @@ const sbVote = (pollId, optionId, userId) =>
     { onConflict: "poll_id,user_id" }
   );
 
+/* ---------- attendance (private, self-reported) ---------- */
+const sbGetAttendance = (userId) =>
+  sb.from("attendance_records").select().eq("user_id", userId);
+const sbMarkAttendance = (userId, course, classDate, status) =>
+  sb.from("attendance_records").upsert(
+    { user_id: userId, course, class_date: classDate, status },
+    { onConflict: "user_id,course,class_date" }
+  );
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);

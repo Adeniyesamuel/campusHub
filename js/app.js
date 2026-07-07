@@ -60,18 +60,14 @@ const state = {
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
+  pollChangingIds: [], // poll ids currently showing options again to re-vote
   classroom: {
     announcements: [], // loaded from Supabase after login — see hydrateClassInfo()
     timetable: [],     // loaded from Supabase after login — see hydrateClassInfo()
     exams: [],         // loaded from Supabase after login — see hydrateClassInfo()
     assignments: [], // loaded from Supabase after login — see hydrateClassInfo()
     polls: [], // loaded from Supabase after login — see hydrateClassInfo()
-    attendance: [
-      { course: "CSC 201", present: 10, total: 12 },
-      { course: "MTH 201", present: 8, total: 12 },
-      { course: "CSC 203", present: 12, total: 12 },
-      { course: "GST 201", present: 7, total: 10 },
-    ],
+    attendance: [], // loaded from Supabase after login — see hydrateClassInfo()
   },
   materials: [
     { id: 1, title: "CSC 201 Past Questions (2019–2024, with answers)", course: "CSC 201", type: "Past Questions", by: "Adaeze O.", sum: 47, count: 10, mine: 0 },
@@ -573,6 +569,16 @@ async function hydrateClassInfo() {
       .map((o) => ({ id: o.id, label: o.label, votes: countByOption.get(o.id) || 0 }));
     return { id: p.id, q: p.question, options, voted: myVoteByPoll.get(p.id) || null };
   }));
+
+  const { data: attRows } = await sbGetAttendance(state.user.id);
+  const attByCourse = new Map();
+  (attRows || []).forEach((r) => {
+    const agg = attByCourse.get(r.course) || { course: r.course, present: 0, total: 0 };
+    agg.total++;
+    if (r.status === "present") agg.present++;
+    attByCourse.set(r.course, agg);
+  });
+  state.classroom.attendance = [...attByCourse.values()];
 }
 
 /* loads the public marketplace feed for everyone, plus the vendor's own
@@ -1522,9 +1528,10 @@ function classTabHTML() {
 
   const polls = cr.polls.length ? cr.polls.map((p) => {
     const total = p.options.reduce((s, o) => s + o.votes, 0) || 1;
+    const showOptions = p.voted === null || state.pollChangingIds.includes(p.id);
     const opts = p.options.map((o) => {
       const pct = Math.round((o.votes / total) * 100);
-      if (p.voted === null) {
+      if (showOptions) {
         return `<button class="poll-opt" data-poll="${p.id}" data-opt="${o.id}">${esc(o.label)}</button>`;
       }
       return `
@@ -1537,11 +1544,14 @@ function classTabHTML() {
       <div class="card">
         <div class="row-title">🗳️ ${esc(p.q)}</div>
         <div class="poll-opts">${opts}</div>
-        <div class="row-sub" style="margin-top:8px">${total} vote${total !== 1 ? "s" : ""}${p.voted !== null ? " · you voted" : ""}</div>
+        <div class="row-sub" style="margin-top:8px">
+          ${total} vote${total !== 1 ? "s" : ""}${p.voted !== null ? " · you voted" : ""}
+          ${p.voted !== null && !showOptions ? `<button class="poll-change" data-change-vote="${p.id}">Change vote</button>` : ""}
+        </div>
       </div>`;
   }).join("") : `<div class="empty">No polls yet</div>`;
 
-  const att = cr.attendance.map((a) => {
+  const att = cr.attendance.length ? cr.attendance.map((a) => {
     const pct = Math.round((a.present / a.total) * 100);
     return `
       <div class="card">
@@ -1552,7 +1562,7 @@ function classTabHTML() {
         <div class="att-track"><div class="att-fill ${pct >= 75 ? "" : "low"}" style="width:${pct}%"></div></div>
         ${pct < 75 ? `<div class="row-sub" style="color:var(--rose-600)">⚠️ Below 75% — you may not qualify to write this exam</div>` : ""}
       </div>`;
-  }).join("");
+  }).join("") : `<div class="empty">No attendance marked yet</div>`;
 
   return `
     <div class="two-col">
@@ -1582,7 +1592,10 @@ function classTabHTML() {
           <button class="btn btn-ghost btn-sm" data-act="add-poll">＋ Add</button>
         </div>
         ${polls}
-        <div class="section-head"><div><div class="eyebrow">Your attendance</div><h3 class="h3">Attendance</h3></div></div>
+        <div class="section-head">
+          <div><div class="eyebrow">Your attendance</div><h3 class="h3">Attendance</h3></div>
+          <button class="btn btn-ghost btn-sm" data-act="mark-attendance">＋ Mark</button>
+        </div>
         ${att}
         <div class="card" style="display:flex;gap:10px">
           <button class="btn btn-ghost" style="flex:1" data-mat-jump="Past Questions">📑 Past questions</button>
@@ -1838,9 +1851,18 @@ function bindStudyEvents() {
       const pollId = b.dataset.poll, optionId = b.dataset.opt;
       const { error } = await sbVote(pollId, optionId, state.user.id);
       if (error) return toast("Couldn't record vote: " + error.message);
+      state.pollChangingIds = state.pollChangingIds.filter((id) => id !== pollId);
       await hydrateClassInfo();
       render(); toast("Vote recorded 🗳️");
     }));
+  document.querySelectorAll("[data-change-vote]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.pollChangingIds.push(b.dataset.changeVote);
+      render();
+    }));
+
+  const markAttBtn = document.querySelector('[data-act="mark-attendance"]');
+  if (markAttBtn) markAttBtn.addEventListener("click", showAttendanceForm);
   document.querySelectorAll("[data-mat-jump]").forEach((b) =>
     b.addEventListener("click", () => {
       state.studyTab = "materials"; state.matFilter = b.dataset.matJump; render();
@@ -2023,6 +2045,39 @@ function showPollForm() {
     if (optErr) { btn.disabled = false; btn.textContent = "Post poll"; return toast("Couldn't add options: " + optErr.message); }
     await hydrateClassInfo();
     closeModal(); render(); toast("Poll posted");
+  });
+}
+
+/* --- mark attendance for a course/date — private, self-reported;
+   marking the same course/date again is an update, not a duplicate --- */
+function showAttendanceForm() {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  let status = "present";
+  openModal(`
+    ${modalHead("Mark attendance")}
+    <input id="attCourse" class="input" placeholder="Course (e.g. CSC 201)" />
+    <input id="attDate" class="input" type="date" value="${todayISO}" />
+    <div class="seg">
+      <button class="seg-btn active" data-status="present">Present</button>
+      <button class="seg-btn" data-status="absent">Absent</button>
+    </div>
+    <button class="btn btn-primary btn-block" id="attGo" style="margin-top:12px">Save</button>
+  `);
+  document.querySelectorAll("[data-status]").forEach((b) =>
+    b.addEventListener("click", () => {
+      status = b.dataset.status;
+      document.querySelectorAll("[data-status]").forEach((x) => x.classList.toggle("active", x === b));
+    }));
+  $("#attGo").addEventListener("click", async () => {
+    const course = $("#attCourse").value.trim();
+    const date = $("#attDate").value;
+    if (!course || !date) return toast("Fill in course and date");
+    const btn = $("#attGo");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const { error } = await sbMarkAttendance(state.user.id, course, date, status);
+    if (error) { btn.disabled = false; btn.textContent = "Save"; return toast("Couldn't save: " + error.message); }
+    await hydrateClassInfo();
+    closeModal(); render(); toast("Attendance saved");
   });
 }
 
