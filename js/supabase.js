@@ -57,7 +57,7 @@ const sbInsertSale = (row) => sb.from("sales").insert(row).select().single();
 const sbGetPublicSalesCount = (shopId) => sb.rpc("get_shop_sales_count", { target_shop_id: shopId });
 
 /* ---------- events + tickets ---------- */
-const sbGetEvents = () => sb.from("events").select("*, ticket_tiers(*)").order("created_at", { ascending: false });
+const sbGetEvents = () => sb.from("events").select("*, ticket_tiers(*)").order("starts_at", { ascending: true });
 const sbInsertEvent = (row) => sb.from("events").insert(row).select().single();
 const sbInsertTicketTiers = (rows) => sb.from("ticket_tiers").insert(rows).select();
 const sbGetTierSoldCounts = () => sb.rpc("get_tier_sold_counts");

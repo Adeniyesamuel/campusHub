@@ -11,7 +11,7 @@
 const $ = (sel) => document.querySelector(sel);
 const naira = (n) => "₦" + Number(n).toLocaleString("en-NG");
 const timeNow = () =>
-  new Date().toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" });
+  new Date().toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit", hour12: true }).toUpperCase();
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -430,7 +430,29 @@ function hydrateUser(profileRow, businessRow, via) {
 }
 
 const fmtRowTime = (iso) =>
-  new Date(iso).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" });
+  new Date(iso).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit", hour12: true }).toUpperCase();
+
+// "Sat, 15 Aug · 7:00 PM" — the one place event date/time gets formatted,
+// used everywhere an event's starts_at is displayed
+const fmtEventDateTime = (iso) => {
+  const d = new Date(iso);
+  const datePart = d.toLocaleDateString("en-NG", { weekday: "short", day: "numeric", month: "short" });
+  const timePart = d.toLocaleTimeString("en-NG", { hour: "numeric", minute: "2-digit", hour12: true }).toUpperCase();
+  return `${datePart} · ${timePart}`;
+};
+
+// supabase-js only puts a generic "Edge Function returned a non-2xx status
+// code" on the error object for non-2xx responses — the actual message we
+// wrote (e.g. "Ticket not found", "your payment has been refunded") is in
+// the response body, which has to be parsed from error.context ourselves.
+async function edgeErrorMessage(error, fallback) {
+  if (!error) return fallback;
+  try {
+    const body = await error.context.json();
+    if (body && body.error) return body.error;
+  } catch (e) { /* fall back below */ }
+  return error.message || fallback;
+}
 
 const mapListingRow = (row) => ({
   id: row.id,
@@ -503,8 +525,7 @@ async function hydrateEvents() {
   state.events = (eventRows || []).map((ev) => ({
     id: ev.id,
     title: ev.title,
-    date: ev.date,
-    time: ev.time,
+    startsAt: ev.starts_at,
     venue: ev.venue,
     tag: ev.tag,
     img: ev.image_url,
@@ -960,7 +981,7 @@ function eventsScreen() {
           <div>
             <span class="tag">${esc(ev.tag)}</span>
             <div class="event-title">${esc(ev.title)}</div>
-            <div class="event-meta">${esc(ev.date)} · ${esc(ev.time)}</div>
+            <div class="event-meta">${esc(fmtEventDateTime(ev.startsAt))}</div>
             <div class="event-meta">📍 ${esc(ev.venue)}</div>
             <div class="event-meta">By ${esc(ev.organizer)}</div>
           </div>
@@ -2376,17 +2397,7 @@ function renderCheckout(co) {
     const finish = async (reference) => {
       const { data: confirmData, error: confirmErr } = await sbConfirmTicket(ticketIds, reference);
       if (confirmErr || !confirmData || confirmData.error) {
-        // supabase-js only puts a generic "non-2xx status code" message on
-        // confirmErr — the actual reason (e.g. "sold out, refunded") is in
-        // the response body, which has to be parsed from confirmErr.context
-        let msg = confirmData && confirmData.error;
-        if (!msg && confirmErr) {
-          msg = confirmErr.message;
-          try {
-            const body = await confirmErr.context.json();
-            if (body && body.error) msg = body.error;
-          } catch (e) { /* fall back to confirmErr.message */ }
-        }
+        const msg = (confirmData && confirmData.error) || await edgeErrorMessage(confirmErr, "Something went wrong confirming your tickets.");
         payBtn.disabled = false; payBtn.textContent = payLabel;
         return toast(msg || "Something went wrong confirming your tickets.");
       }
@@ -2444,7 +2455,8 @@ function showScanTicket() {
     const { data, error } = await sbScanTicket(code.trim());
     scanGo.disabled = false;
     if (error) {
-      renderResult(`<div class="trust-card"><div class="trust-name">❌ ${esc(error.message || "Couldn't verify this code")}</div></div>`);
+      const msg = await edgeErrorMessage(error, "Couldn't verify this code");
+      renderResult(`<div class="trust-card"><div class="trust-name">❌ ${esc(msg)}</div></div>`);
       return;
     }
     if (data.error) {
@@ -2455,7 +2467,7 @@ function showScanTicket() {
       const reasonText = {
         not_found: "Ticket code not found.",
         not_paid: "This ticket was never paid for.",
-        already_used: "Already used at " + new Date(data.used_at).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" }) + ".",
+        already_used: "Already used at " + new Date(data.used_at).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit", hour12: true }).toUpperCase() + ".",
       }[data.reason] || "This ticket isn't valid.";
       renderResult(`
         <div class="trust-card">
@@ -2574,8 +2586,8 @@ function renderHost(h) {
       <input id="eTitle" class="input" placeholder="e.g. End of Semester Party" value="${esc(h.ev.title)}" />
       <div class="field-label"><span class="req">*</span>Date &amp; time</div>
       <div class="phone-row">
-        <input id="eDate" class="input" placeholder="e.g. Sat, 15 Aug" value="${esc(h.ev.date)}" />
-        <input id="eTime" class="input" placeholder="e.g. 7:00 PM" value="${esc(h.ev.time)}" />
+        <input id="eDate" class="input" type="date" value="${esc(h.ev.date)}" />
+        <input id="eTime" class="input" type="time" value="${esc(h.ev.time)}" />
       </div>
       <div class="field-label"><span class="req">*</span>Venue</div>
       <input id="eVenue" class="input" placeholder="e.g. Multipurpose Hall" value="${esc(h.ev.venue)}" />
@@ -2596,7 +2608,7 @@ function renderHost(h) {
       h.ev.venue = $("#eVenue").value.trim();
       h.ev.tag = $("#eTag").value;
       h.ev.desc = $("#eDesc").value.trim();
-      $("#hNext").disabled = !(h.ev.title && h.ev.date && h.ev.venue);
+      $("#hNext").disabled = !(h.ev.title && h.ev.date && h.ev.time && h.ev.venue);
     };
     ["eTitle", "eDate", "eTime", "eVenue", "eDesc"].forEach((f) =>
       $("#" + f).addEventListener("input", check));
@@ -2655,7 +2667,7 @@ function renderHost(h) {
     const { data: event, error: eventErr } = await sbInsertEvent({
       organizer_id: state.user.id,
       organizer_name: h.org.name, organizer_email: h.org.email, organizer_phone: h.org.phone,
-      title: h.ev.title, date: h.ev.date, time: h.ev.time || "TBA",
+      title: h.ev.title, starts_at: new Date(h.ev.date + "T" + h.ev.time).toISOString(),
       venue: h.ev.venue, tag: h.ev.tag, description: h.ev.desc,
       image_url: h.photo || img("photo-1492684223066-81342ee5ff30"),
     });
