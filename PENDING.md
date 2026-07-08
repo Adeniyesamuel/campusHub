@@ -1,8 +1,8 @@
 # CampusHub — Pending / Deferred Work
 
-Backlog compiled from Phases 1–4 of the Supabase/Paystack backend migration and the
-original integration plan. Check items off as they get built — this file is a living
-checklist, not a historical record.
+Backlog compiled from Phases 1–5 of the Supabase/Paystack backend migration and the
+original integration plan — all five originally-planned phases are now shipped. Check
+items off as they get built — this file is a living checklist, not a historical record.
 
 ## Launch blockers
 
@@ -30,32 +30,42 @@ checklist, not a historical record.
       client role by design; today only you, via the SQL Editor, can read them at
       all).
 
-## From the original plan — not yet started
+## From the original plan — all five phases now shipped
 
 The original plan numbered five phases: Auth, Marketplace, Events/Tickets, Chat, Study
-hub. What actually shipped as "Phase 4" was marketplace/event payments via Paystack
-subaccounts — an unplanned addition that came out of the marketplace/ticketing work.
-The original **Phase 5 (Study hub)** is still fully pending. The original **Phase 4
-(Chat)** has since shipped (see below) — only **Phase 5** remains here:
+hub. What actually shipped as "Phase 4" (in this repo's numbering) was marketplace/event
+payments via Paystack subaccounts — an unplanned addition that came out of the
+marketplace/ticketing work. All five phases from the original plan are now done:
 
 - [x] **Chat backend** — real `conversations`/`messages` tables with Realtime delivery
       (migration 0008), plus restricted user blocking and message reporting (migration
-      0009) and image sharing (migration 0010). The old in-memory `state.chats` +
-      `cannedReplies` simulation is kept only as the Lost & Found fallback, since
-      reporters there aren't tied to real profiles yet (see below).
-- [ ] **Study hub backend** — classroom announcements, timetable, exams, assignments,
-      polls, attendance, and materials are all hardcoded demo data in `state`, with no
-      hydrate function and no Supabase read/write at all.
-  - [ ] Poll votes are a single global "voted" flag, not enforced per-user
-  - [ ] Material ratings use a client-side sum/count/mine hack, not per-user rows
-  - [ ] Assignment "submission" only reads the file's name — nothing is actually
-        uploaded or stored
-  - [ ] Attendance is read-only display with no write path — source of truth
-        (self-reported vs. class-rep-marked) still undecided
-- [ ] **GPA/CGPA calculator persistence** — the plan recommended `localStorage` (same
-      mechanism as the dark-mode flag) rather than a full backend table, but this was
-      never actually implemented. It's currently pure in-memory state and resets on
-      every page reload.
+      0009), image sharing (migration 0010), and a Messages inbox (migration 0011). The
+      old in-memory `state.chats` + `cannedReplies` simulation is fully removed — Lost &
+      Found now uses real reporters and real chat too (migration 0012), so there's no
+      remaining demo-mode fallback anywhere in the app.
+- [x] **Study hub backend** (Phase 5, built in 6 chunks — migrations 0012–0017):
+      campus feed + lost & found (0012), class announcements/timetable/exams (0013),
+      assignments with real per-student file submissions (0014), polls with real
+      per-user votes and a change-vote UI (0015), self-reported attendance (0016), and
+      study materials with real uploads and per-user ratings (0017). The three
+      shared-mutable-state bugs from the original demo are all fixed by real per-user
+      rows: poll votes, material ratings, and assignment submissions each now enforce
+      one-per-user server-side instead of a flag/counter shared across the whole class.
+- [x] **GPA/CGPA calculator persistence** — now saved to `localStorage` (key `ch-gpa`,
+      same mechanism as the dark-mode flag) exactly as the original plan recommended,
+      rather than a backend table, since it's single-user scratch data with no sharing
+      component. Verified to survive a full page reload.
+
+Two deliberate v1 scoping calls made during Study hub design, not yet built:
+
+- [ ] **Course-rep-only announcement posting.** v1 lets any student in a class post an
+      announcement (self-attested via `is_my_class()`); a verified "course rep" role
+      with rep-only posting rights needs a rep system that doesn't exist yet.
+- [ ] **Rep-marked attendance.** v1 attendance is fully self-reported and private
+      (migration 0016) — a class rep marking attendance for the whole class needs the
+      same rep system as above, plus a decision on whether rep-marked records should be
+      visible to the students they're marked for (self-reported ones currently aren't
+      visible to anyone but the student).
 
 ## Deferred during Phase 1 (auth)
 
@@ -82,11 +92,6 @@ The original **Phase 5 (Study hub)** is still fully pending. The original **Phas
 
 ## Quality / UX
 
-- [ ] **Campus feed + Lost & Found are still demo data.** Never part of any backend
-      phase so far — posts, channel filtering, and lost/found reports all live in
-      plain in-memory `state` with no Supabase table backing them. Needs its own
-      backend pass (own migration + hydrate function), same treatment as the
-      marketplace/events work.
 - [ ] **Profile photo upload UI.** The `avatars` storage bucket has existed since
       migration 0001 (Phase 1) with public-read/own-folder-upload policies already in
       place — no screen anywhere actually uses it to upload or display a photo.

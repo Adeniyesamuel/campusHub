@@ -69,13 +69,7 @@ const state = {
     polls: [], // loaded from Supabase after login — see hydrateClassInfo()
     attendance: [], // loaded from Supabase after login — see hydrateClassInfo()
   },
-  materials: [
-    { id: 1, title: "CSC 201 Past Questions (2019–2024, with answers)", course: "CSC 201", type: "Past Questions", by: "Adaeze O.", sum: 47, count: 10, mine: 0 },
-    { id: 2, title: "Data Structures summary — handwritten notes", course: "CSC 201", type: "Handwritten Notes", by: "Tunde B.", sum: 38, count: 9, mine: 0 },
-    { id: 3, title: "MTH 201 lecture slides (complete)", course: "MTH 201", type: "Slides", by: "Course Rep", sum: 27, count: 7, mine: 0 },
-    { id: 4, title: "GST 201 recorded tutorial — exam focus areas", course: "GST 201", type: "Recorded Tutorial", by: "Emeka N.", sum: 18, count: 6, mine: 0 },
-    { id: 5, title: "STA 201 formula sheet PDF", course: "STA 201", type: "PDF", by: "Kemi A.", sum: 12, count: 5, mine: 0 },
-  ],
+  materials: [], // loaded from Supabase after login — see hydrateMaterials()
   matFilter: "All",
   gpaRows: [
     { course: "CSC 201", units: 3, grade: "A" },
@@ -581,6 +575,26 @@ async function hydrateClassInfo() {
   state.classroom.attendance = [...attByCourse.values()];
 }
 
+/* loads study materials (campus-wide, not cohort-scoped) with aggregate
+   ratings from get_material_ratings() and the caller's own rating */
+async function hydrateMaterials() {
+  if (!state.user.level) return;
+  const { data: matRows } = await sbGetMaterials();
+  const { data: ratingRows } = await sbGetMaterialRatings();
+  const aggByMaterial = new Map((ratingRows || []).map((r) => [r.material_id, { avg: Number(r.avg_stars), count: Number(r.rating_count) }]));
+  const { data: myRatingRows } = await sbGetMyRatings(state.user.id);
+  const myRatingByMaterial = new Map((myRatingRows || []).map((r) => [r.material_id, r.stars]));
+
+  state.materials = (matRows || []).map((r) => {
+    const agg = aggByMaterial.get(r.id) || { avg: 0, count: 0 };
+    return {
+      id: r.id, title: r.title, course: r.course, type: r.material_type,
+      by: r.uploader?.name || "Someone", filePath: r.file_path,
+      avg: agg.avg, count: agg.count, mine: myRatingByMaterial.get(r.id) || 0,
+    };
+  });
+}
+
 /* loads the public marketplace feed for everyone, plus the vendor's own
    inventory/orders/sales/shop stats if the logged-in user is a vendor */
 async function hydrateMarketplace() {
@@ -797,6 +811,7 @@ async function completeAuth(via) {
   await hydrateFeed();
   await hydrateLostFound();
   await hydrateClassInfo();
+  await hydrateMaterials();
   await hydrateMarketplace();
   await hydrateEvents();
   await hydratePayoutAccount();
@@ -1043,7 +1058,7 @@ function homeScreen() {
 
   /* ---- For You ---- */
   const firstName = (state.user.name || "there").split(" ")[0];
-  const topMat = [...state.materials].sort((a, b) => (b.sum / b.count) - (a.sum / a.count))[0];
+  const topMat = [...state.materials].sort((a, b) => b.avg - a.avg)[0];
   const hostelCount = state.listings.filter((l) => l.cat === "Hostel Items").length;
   const academic = !!state.user.level;
   const forYou = `
@@ -1613,10 +1628,9 @@ function materialsTabHTML() {
 
   const list = state.materials
     .filter((m) => state.matFilter === "All" || m.type === state.matFilter)
-    .sort((a, b) => (b.sum / b.count) - (a.sum / a.count));
+    .sort((a, b) => b.avg - a.avg);
 
   const cards = list.length ? list.map((m) => {
-    const avg = m.sum / m.count;
     const rateRow = Array.from({ length: 5 }, (_, i) =>
       `<button class="rate-star ${m.mine > i ? "on" : ""}" data-rate="${m.id}" data-val="${i + 1}">★</button>`).join("");
     return `
@@ -1627,8 +1641,8 @@ function materialsTabHTML() {
             <div class="row-title">${esc(m.title)}</div>
             <div class="row-sub">${esc(m.course)} · ${esc(m.type)} · by ${esc(m.by)}</div>
             <div class="mat-rating">
-              <span class="mat-stars">${stars(avg)}</span>
-              <b>${avg.toFixed(1)}</b><span class="row-sub">(${m.count} rating${m.count !== 1 ? "s" : ""})</span>
+              <span class="mat-stars">${stars(m.avg)}</span>
+              <b>${m.avg.toFixed(1)}</b><span class="row-sub">(${m.count} rating${m.count !== 1 ? "s" : ""})</span>
             </div>
             <div class="mat-rate">Rate it: ${rateRow}</div>
           </div>
@@ -1872,20 +1886,26 @@ function bindStudyEvents() {
   document.querySelectorAll("[data-mat]").forEach((b) =>
     b.addEventListener("click", () => { state.matFilter = b.dataset.mat; render(); }));
   document.querySelectorAll("[data-rate]").forEach((b) =>
-    b.addEventListener("click", () => {
-      const m = state.materials.find((x) => x.id === Number(b.dataset.rate));
+    b.addEventListener("click", async () => {
+      const materialId = b.dataset.rate;
       const val = Number(b.dataset.val);
-      if (m.mine > 0) { m.sum -= m.mine; m.count--; } // replace previous rating
-      m.mine = val; m.sum += val; m.count++;
+      const { error } = await sbRateMaterial(materialId, state.user.id, val);
+      if (error) return toast("Couldn't save rating: " + error.message);
+      await hydrateMaterials();
       render(); toast("Thanks for rating ⭐");
     }));
   document.querySelectorAll("[data-download]").forEach((b) =>
-    b.addEventListener("click", () => toast("Download starts in the real build 📥")));
+    b.addEventListener("click", () => {
+      const m = state.materials.find((x) => x.id === b.dataset.download);
+      if (m) window.open(sbGetMaterialFileUrl(m.filePath), "_blank");
+    }));
   const upBtn = document.querySelector('[data-act="open-upload"]');
   if (upBtn) upBtn.addEventListener("click", showMaterialUpload);
 
-  /* cgpa: recompute by re-render on change, keeping it simple */
-  const rerender = () => render();
+  /* cgpa: recompute by re-render on change, keeping it simple —
+     persisted to localStorage (same mechanism as the dark-mode flag),
+     no backend table since this is single-user scratch data */
+  const rerender = () => { saveGpaState(); render(); };
   document.querySelectorAll(".g-course, .g-units, .g-grade").forEach((el) => {
     el.addEventListener("change", () => {
       const i = Number(el.dataset.i);
@@ -2083,7 +2103,7 @@ function showAttendanceForm() {
 
 /* --- upload study material modal --- */
 function showMaterialUpload() {
-  let fileName = null;
+  let file = null;
   const types = ["PDF", "Handwritten Notes", "Recorded Tutorial", "Slides", "Past Questions"];
   openModal(`
     ${modalHead("Upload study material")}
@@ -2099,25 +2119,30 @@ function showMaterialUpload() {
     <p class="form-hint">Good materials get rated up and shown first — put your name on the map 🌟</p>
     <button class="btn btn-primary btn-block" id="matGo">Upload</button>
   `);
-  const box = $("#matBox"), file = $("#matFile");
-  box.addEventListener("click", () => file.click());
-  file.addEventListener("change", () => {
-    const f = file.files && file.files[0];
-    if (!f) return;
-    fileName = f.name;
-    box.querySelector(".up-text").textContent = "📄 " + f.name;
+  const box = $("#matBox"), fileInput = $("#matFile");
+  box.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    box.querySelector(".up-text").textContent = "📄 " + file.name;
     box.querySelector(".up-hint").textContent = "Tap to change file";
   });
-  $("#matGo").addEventListener("click", () => {
+  $("#matGo").addEventListener("click", async () => {
     const title = $("#matTitle").value.trim();
     if (!title) return toast("Give your material a title");
-    if (!fileName) return toast("Attach a file first");
-    state.materials.unshift({
-      id: Date.now(), title,
+    if (!file) return toast("Attach a file first");
+    const btn = $("#matGo");
+    btn.disabled = true; btn.textContent = "Uploading…";
+    const { path, error: upErr } = await sbUploadMaterialFile(state.user.id, file);
+    if (upErr) { btn.disabled = false; btn.textContent = "Upload"; return toast("Couldn't upload: " + upErr.message); }
+    const { error } = await sbInsertMaterial({
+      uploader_id: state.user.id, title,
       course: $("#matCourse").value.trim() || "General",
-      type: $("#matType").value,
-      by: "You", sum: 5, count: 1, mine: 0,
+      material_type: $("#matType").value,
+      file_path: path,
     });
+    if (error) { btn.disabled = false; btn.textContent = "Upload"; return toast("Couldn't post: " + error.message); }
+    await hydrateMaterials();
     closeModal(); render(); toast("Material uploaded — thank you! 🙌");
   });
 }
@@ -2129,6 +2154,13 @@ function showMaterialUpload() {
 function applyTheme(dark) {
   document.body.classList.toggle("dark", dark);
   try { localStorage.setItem("ch-theme", dark ? "dark" : "light"); } catch (e) { /* private mode */ }
+}
+
+/* GPA/CGPA calculator is single-user scratch data with no sharing
+   component, so it's localStorage-only (same as the dark-mode flag),
+   never a Supabase table — see loadGpaState() at boot for the read side */
+function saveGpaState() {
+  try { localStorage.setItem("ch-gpa", JSON.stringify({ gpaRows: state.gpaRows, semesters: state.semesters })); } catch (e) { /* private mode */ }
 }
 
 function showSettings() {
@@ -3770,6 +3802,15 @@ document.querySelectorAll('[data-act="open-settings"]').forEach((b) =>
 /* restore saved theme */
 try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.add("dark"); } catch (e) { /* private mode */ }
 
+/* restore saved GPA/CGPA scratch data, if any (falls back to the demo defaults above) */
+try {
+  const savedGpa = JSON.parse(localStorage.getItem("ch-gpa") || "null");
+  if (savedGpa && Array.isArray(savedGpa.gpaRows) && Array.isArray(savedGpa.semesters)) {
+    state.gpaRows = savedGpa.gpaRows;
+    state.semesters = savedGpa.semesters;
+  }
+} catch (e) { /* private mode or corrupt data — keep the demo defaults */ }
+
 /* first paint: restore an existing Supabase session before showing the auth flow */
 (async function boot() {
   const session = await sbGetSession();
@@ -3786,6 +3827,7 @@ try { if (localStorage.getItem("ch-theme") === "dark") document.body.classList.a
       await hydrateFeed();
       await hydrateLostFound();
       await hydrateClassInfo();
+      await hydrateMaterials();
       await hydrateMarketplace();
       await hydrateEvents();
       await hydratePayoutAccount();

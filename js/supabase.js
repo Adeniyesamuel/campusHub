@@ -91,6 +91,26 @@ const sbMarkAttendance = (userId, course, classDate, status) =>
     { onConflict: "user_id,course,class_date" }
   );
 
+/* ---------- study materials + ratings ---------- */
+const sbGetMaterials = () =>
+  sb.from("study_materials").select("*, uploader:profiles!uploader_id(name)").order("created_at", { ascending: false });
+const sbInsertMaterial = (row) => sb.from("study_materials").insert(row).select().single();
+const sbGetMaterialRatings = () => sb.rpc("get_material_ratings");
+const sbGetMyRatings = (userId) => sb.from("material_ratings").select("material_id, stars").eq("user_id", userId);
+const sbRateMaterial = (materialId, userId, starsVal) =>
+  sb.from("material_ratings").upsert(
+    { material_id: materialId, user_id: userId, stars: starsVal },
+    { onConflict: "material_id,user_id" }
+  );
+// path convention: {uploader_id}/{uuid}.{ext} — public bucket, so no
+// signed URL is needed to read it back, just the public URL helper
+const sbUploadMaterialFile = (userId, file) => {
+  const ext = (file.name.split(".").pop() || "dat").toLowerCase();
+  const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+  return sb.storage.from("material-files").upload(path, file).then(({ error }) => ({ path, error }));
+};
+const sbGetMaterialFileUrl = (path) => sb.storage.from("material-files").getPublicUrl(path).data.publicUrl;
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);
