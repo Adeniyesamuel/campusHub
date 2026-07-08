@@ -17,7 +17,15 @@ const SUPABASE_ANON_KEY = "sb_publishable_owMigWTOBc4lR4c6nJSBlA_USCirao5";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ---------- auth ---------- */
-const sbSignUp = (email, password) => sb.auth.signUp({ email, password });
+// metadata lands on raw_user_meta_data immediately (even pre-confirmation)
+// — handle_new_user() (migration 0020) reads it to create profiles/
+// businesses rows server-side, regardless of whether email confirmation
+// is required. emailRedirectTo must also be in Supabase's Redirect URLs
+// allowlist (Dashboard -> Authentication -> URL Configuration) or the
+// confirmation link will fail.
+const sbSignUp = (email, password, metadata) =>
+  sb.auth.signUp({ email, password, options: { data: metadata, emailRedirectTo: window.location.origin } });
+const sbResendConfirmation = (email) => sb.auth.resend({ type: "signup", email });
 const sbSignIn = (email, password) => sb.auth.signInWithPassword({ email, password });
 const sbSignOut = () => sb.auth.signOut();
 const sbGetSession = async () => (await sb.auth.getSession()).data.session;
@@ -124,11 +132,12 @@ const sbGetMessageReports = () =>
 const sbMarkReportReviewed = (reportId) =>
   sb.from("message_reports").update({ reviewed_at: new Date().toISOString() }).eq("id", reportId);
 
-/* ---------- profiles + businesses ---------- */
+/* ---------- profiles + businesses ----------
+   No insert wrappers here — both rows are created server-side by the
+   handle_new_user() trigger (migration 0020) right at signup, so the
+   client only ever reads them. */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
-const sbInsertProfile = (row) => sb.from("profiles").insert(row);
 const sbGetBusiness = (ownerId) => sb.from("businesses").select().eq("owner_id", ownerId).maybeSingle();
-const sbInsertBusiness = (row) => sb.from("businesses").insert(row).select().single();
 
 /* ---------- listings (marketplace) ---------- */
 const sbGetListings = () =>

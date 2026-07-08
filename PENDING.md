@@ -10,25 +10,42 @@ items off as they get built — this file is a living checklist, not a historica
       documentation found either confirming or denying support on a Starter Business
       account specifically — everything is fully verified in test mode, but this needs
       a real check once compliance review completes, before accepting real payments.
-- [ ] **Turn email confirmation back on** (disabled in Phase 1 to keep the demo signup
-      flow instant) and build a "check your email" screen for the signup wizard,
-      paired with custom SMTP/Resend so confirmation emails don't rely on Supabase's
-      low-volume shared sender.
-- [ ] **Terms of Service + Privacy Policy pages.** The signup screen already links to
-      "Terms of Service", "Privacy Policy", and "Cookie Use" — none of these pages
-      exist yet.
-- [ ] **Admin panel.** Accessible only to your account, enforced server-side (an
-      `is_admin` flag or your user ID checked in RLS/RPCs — not just a hidden client
-      route, which anyone could reach directly). Two sections:
-      1. **Vendor verification queue** — pending `businesses` rows with Verify/Reject
-         actions, replacing the current by-hand SQL Editor flow.
-      2. **Message reports inbox** — `message_reports` rows newest-first, showing the
-         reported message text, reporter, reported user, and timestamp, with at least
-         a "mark reviewed" action.
-      Must exist before real users are onboarded — reports filed via "Report message"
-      currently land in a table nobody can see (no select policy is granted to any
-      client role by design; today only you, via the SQL Editor, can read them at
-      all).
+- [x] **Email confirmation.** Was disabled in Phase 1 to keep the demo signup flow
+      instant. Now on, using Supabase's default/shared sender for now (no custom domain
+      yet — see below). `handle_new_user()` trigger (migration 0020) creates
+      profiles/businesses server-side from signUp() metadata regardless of
+      confirmation status, and the signup wizard shows a "check your email" screen +
+      resend button when `signUp()` comes back with no session. Deferred vendor payout
+      setup (needs a live session, not just a DB row) auto-completes on first
+      post-confirmation login.
+- [ ] **Custom SMTP via Resend, parked until a domain is bought.** Supabase's shared
+      sender has a real, previously-hit rate limit (Phase 1 testing) — fine for
+      continued dev testing and early soft-launch numbers, not for real volume. Needs a
+      verified sending domain (Resend requires SPF/DKIM records), then Dashboard ->
+      Authentication -> SMTP Settings (host smtp.resend.com, port 465, username
+      "resend", password = Resend API key).
+- [x] **Add the production URL to Supabase's Redirect URLs + Site URL.** Both
+      `http://localhost:8080` and `https://campus-hub-smoky.vercel.app/` are now
+      allowlisted.
+- [ ] **Verify the real confirmation-link click-through end to end**, once Supabase's
+      shared-sender rate limit resets (hit twice in one day of testing — genuinely
+      restrictive). Everything up to that point is proven live: `signUp()` +
+      `handle_new_user()` trigger create the account correctly regardless of
+      confirmation status, the check-your-email screen shows and its resend button
+      works. The one unverified step is clicking a real link and confirming the
+      `http://localhost:8080` (or Vercel) redirect lands with an established session —
+      attempted once, but the token had already been invalidated by an earlier resend
+      click in the same test run before it could be used.
+- [x] **Terms of Service + Privacy Policy + Cookie Use pages.** The signup screen's
+      previously-plain-text references are now real clickable links opening a modal
+      with actual drafted content, specific to what CampusHub does today (not generic
+      boilerplate) — plain-language drafts, worth real legal review before scaling past
+      an early soft launch.
+- [x] **Admin panel.** `is_admin` flag on profiles, enforced server-side in RLS/RPCs
+      (migrations 0018–0019). Vendor verification queue (Verify/Reject, with a real
+      pending/verified/rejected state) and message reports inbox (mark reviewed) both
+      live and tested — including confirming a non-admin can't read reports or
+      self-grant admin.
 
 ## From the original plan — all five phases now shipped
 

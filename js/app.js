@@ -124,6 +124,7 @@ function render() {
     else if (state.authStage === "payout") screen = payoutSetupScreen();
     else if (state.authStage === "profile") screen = profileScreen();
     else if (state.authStage === "auth") screen = authScreen();
+    else if (state.authStage === "checkEmail") screen = checkEmailScreen();
     else screen = roleScreen();
     $("#content").innerHTML = screen;
     bindAuthEvents();
@@ -185,6 +186,24 @@ function roleScreen() {
         <p class="auth-switch">
           Already have an account?
           <button data-act="goto-login">Log in</button>
+        </p>
+      </div>
+    </div>`;
+}
+
+function checkEmailScreen() {
+  return `
+    <div class="auth-page">
+      <div class="auth-box">
+        <div class="auth-brand">
+          <div class="wordmark">Campus<span>Hub.</span></div>
+          <div class="uni-label">University of Lagos</div>
+        </div>
+        <div class="auth-title">Check your email 📬</div>
+        <p class="auth-sub">We sent a confirmation link to <b>${esc(state.authId)}</b>. Click it to activate your account, then come back and log in.</p>
+        <button class="btn btn-ghost btn-block" id="resendEmailBtn" style="margin-top:16px">Resend email</button>
+        <p class="auth-switch" style="margin-top:14px">
+          <button data-act="check-email-back">← Back to login</button>
         </p>
       </div>
     </div>`;
@@ -347,7 +366,7 @@ function authScreen() {
           <button class="continue-btn" id="pwContinue" disabled>${signup ? "Create account" : "Log in"}</button>
 
           ${signup
-            ? `<p class="auth-terms">By continuing, you agree to our <b>Terms of Service</b>, <b>Privacy Policy</b> and <b>Cookie Use</b>.</p>`
+            ? `<p class="auth-terms">By continuing, you agree to our <button class="legal-link" data-legal="terms">Terms of Service</button>, <button class="legal-link" data-legal="privacy">Privacy Policy</button> and <button class="legal-link" data-legal="cookies">Cookie Use</button>.</p>`
             : `<p class="auth-terms"><b>Forgot password?</b> Reset comes in the real build.</p>`}
         </div>
       </div>`;
@@ -374,7 +393,7 @@ function authScreen() {
           <input id="authId" class="auth-input" placeholder="Email or phone number" autocomplete="username" />
           <button class="continue-btn" id="authContinue" disabled>Continue</button>
 
-          <p class="auth-terms">By continuing, you agree to our <b>Terms of Service</b>, <b>Privacy Policy</b> and <b>Cookie Use</b>.</p>
+          <p class="auth-terms">By continuing, you agree to our <button class="legal-link" data-legal="terms">Terms of Service</button>, <button class="legal-link" data-legal="privacy">Privacy Policy</button> and <button class="legal-link" data-legal="cookies">Cookie Use</button>.</p>
 
           <p class="auth-switch">
             Already have an account?
@@ -768,13 +787,8 @@ async function completeAuth(via) {
 
   if (state.authMode === "signup") {
     busy("Creating account…");
-    const { data, error } = await sbSignUp(email, password);
-    if (error) return failed("Create account", error.message);
-
-    const userId = data.user.id;
     const academic = state.authRole === "student" || state.vendorType === "student";
-    const profileRow = {
-      id: userId,
+    const metadata = {
       role: state.authRole,
       vendor_type: state.authRole === "vendor" ? (state.vendorType || "external") : null,
       name: state.profile.name || (state.authRole === "vendor" && state.vendorType === "external" ? state.business.name : "") || "CampusHub User",
@@ -782,24 +796,57 @@ async function completeAuth(via) {
       level: academic ? (state.profile.level || null) : null,
       dept: academic ? (state.profile.dept || null) : null,
     };
-    const { error: profileErr } = await sbInsertProfile(profileRow);
-    if (profileErr) return failed("Create account", "Couldn't save your profile: " + profileErr.message);
-
-    let businessRow = null;
     if (state.authRole === "vendor") {
       const b = state.business;
-      const { data: biz, error: bizErr } = await sbInsertBusiness({
-        owner_id: userId, name: b.name, category: b.cat, description: b.desc,
+      metadata.business = {
+        name: b.name, category: b.cat, description: b.desc,
         phone: b.phone, location: b.loc, social_handle: b.social, cac_number: b.cac,
-      });
-      if (bizErr) return failed("Create account", "Couldn't save your business info: " + bizErr.message);
+      };
+    }
+
+    // handle_new_user() (migration 0020) creates the profiles/businesses
+    // rows server-side from this metadata — the client never inserts
+    // them directly, which is what makes this safe regardless of
+    // whether email confirmation ends up required below
+    const { data, error } = await sbSignUp(email, password, metadata);
+    if (error) return failed("Create account", error.message);
+
+    if (!data.session) {
+      // email confirmation is required — the account + profile already
+      // exist (the trigger ran regardless), but there's no session to
+      // do anything further with yet. Payout setup needs a live
+      // Edge Function call, not just a DB row, so it can't happen until
+      // a real session exists — defer it to the first post-confirmation
+      // login (see completeDeferredPayoutIfAny()).
+      if (state.authRole === "vendor" && state.payout.pending) {
+        try {
+          localStorage.setItem("ch-pending-payout", JSON.stringify({
+            business_name: state.payout.business_name, bank_code: state.payout.bank_code,
+            bank_name: state.payout.bank_name, account_number: state.payout.account_number,
+          }));
+        } catch (e) { /* private mode — they can still set it up manually later */ }
+      }
+      state.payout = { pending: false, business_name: "", bank_code: "", bank_name: "", account_number: "" };
+      state.authStage = "checkEmail";
+      render();
+      return;
+    }
+
+    // confirmation is off (or already satisfied) — proceed immediately,
+    // fetching what the trigger just created rather than reconstructing
+    // it from wizard state, same pattern as the login branch below
+    const userId = data.user.id;
+    const { data: profileRow, error: profileErr } = await sbGetProfile(userId);
+    if (profileErr || !profileRow) return failed("Create account", "Account created, but we couldn't load your profile — please log in.");
+
+    let businessRow = null;
+    if (profileRow.role === "vendor") {
+      const { data: biz } = await sbGetBusiness(userId);
       businessRow = biz;
 
-      // optional payout setup — the account already exists at this point
-      // (that's a hard requirement: create-payout-account needs a real
-      // session), so this is a best-effort attempt AFTER signup, never a
-      // blocker. Any failure here — bad bank details, Paystack hiccup,
-      // whatever — just means they finish it later in Settings.
+      // optional payout setup — best-effort, never a blocker. Any
+      // failure here — bad bank details, Paystack hiccup, whatever —
+      // just means they finish it later in Settings.
       if (state.payout.pending) {
         busy("Setting up payouts…");
         const { data: payoutData, error: payoutErr } = await sbCreatePayoutAccount({
@@ -810,8 +857,8 @@ async function completeAuth(via) {
         });
         payoutOutcome = (payoutErr || payoutData?.error) ? "failed" : "created";
       }
-      state.payout = { pending: false, business_name: "", bank_code: "", bank_name: "", account_number: "" };
     }
+    state.payout = { pending: false, business_name: "", bank_code: "", bank_name: "", account_number: "" };
     hydrateUser(profileRow, businessRow, via);
   } else {
     busy("Logging in…");
@@ -848,6 +895,29 @@ async function completeAuth(via) {
   await hydrateFees();
   await hydrateConversations();
   startMyMessagesWatch();
+  await completeDeferredPayoutIfAny();
+}
+
+/* runs at most once per deferred signup — set aside during signup when
+   email confirmation blocked payout setup from completing right away
+   (see completeAuth()'s signup branch), consumed on the first login
+   after confirming. Cleared immediately regardless of outcome, same
+   "never strand a signup" tolerance as the inline path. */
+async function completeDeferredPayoutIfAny() {
+  if (!state.user || state.user.role !== "vendor") return;
+  let pending = null;
+  try { pending = JSON.parse(localStorage.getItem("ch-pending-payout") || "null"); } catch (e) { /* ignore */ }
+  if (!pending) return;
+  try { localStorage.removeItem("ch-pending-payout"); } catch (e) { /* ignore */ }
+
+  const { data, error } = await sbCreatePayoutAccount(pending);
+  if (error || data?.error) {
+    toast("Signed in — payout setup didn't go through, add it later in Settings");
+  } else {
+    toast("Payouts are now set up 🏦");
+    await hydratePayoutAccount();
+    render();
+  }
 }
 
 function bindAuthEvents() {
@@ -953,6 +1023,21 @@ function bindAuthEvents() {
     render();
   });
 
+  // "check your email" screen
+  const resendBtn = document.querySelector("#resendEmailBtn");
+  if (resendBtn) resendBtn.addEventListener("click", async () => {
+    resendBtn.disabled = true; resendBtn.textContent = "Sending…";
+    const { error } = await sbResendConfirmation(state.authId);
+    resendBtn.disabled = false; resendBtn.textContent = "Resend email";
+    toast(error ? "Couldn't resend: " + error.message : "Confirmation email sent again");
+  });
+  const checkEmailBack = document.querySelector('[data-act="check-email-back"]');
+  if (checkEmailBack) checkEmailBack.addEventListener("click", () => {
+    state.authRole = null; state.authStage = null; state.vendorType = null;
+    state.authStep = "start"; state.authId = "";
+    render();
+  });
+
   // back to role picker (from vendor type or auth screens)
   const back = document.querySelector('[data-act="auth-back"]');
   if (back) back.addEventListener("click", () => {
@@ -1023,6 +1108,9 @@ function bindAuthEvents() {
   // social / phone buttons — not wired up yet, coming in a later pass
   document.querySelectorAll("[data-auth]").forEach((b) =>
     b.addEventListener("click", () => toast("Coming soon — use email for now")));
+
+  document.querySelectorAll("[data-legal]").forEach((b) =>
+    b.addEventListener("click", (e) => { e.preventDefault(); showLegalDoc(b.dataset.legal); }));
 
   // email / phone → password step
   const idInput = $("#authId");
@@ -2766,6 +2854,74 @@ const modalHead = (title) => `
     <button class="modal-close" data-close>✕</button>
   </div>`;
 
+/* --- legal pages (Terms of Service / Privacy Policy / Cookie Use) ---
+   Plain-language drafts reflecting what the app actually does today —
+   not a substitute for real legal review before scaling past an early
+   soft launch, but accurate and specific rather than generic boilerplate. */
+const LEGAL_DOCS = {
+  terms: {
+    title: "Terms of Service",
+    body: `
+      <p class="row-sub">Last updated: July 2026</p>
+      <h4 class="h3">1. What CampusHub is</h4>
+      <p class="post-body">CampusHub is a campus marketplace, events, and study-hub platform for University of Lagos students and vendors. You must be affiliated with UNILAG (as a student or a vendor serving the UNILAG community) to use it.</p>
+      <h4 class="h3">2. Your account</h4>
+      <p class="post-body">You're responsible for keeping your login credentials secure and for all activity under your account. Information you provide during signup (name, matric number, department, level, or business details) must be accurate — fake details, fraud, or scamming other students can lead to a permanent ban and may be reported to school authorities and the police.</p>
+      <h4 class="h3">3. Marketplace &amp; vendors</h4>
+      <p class="post-body">Sellers are responsible for the accuracy of their listings and for delivering what they've sold. Buyers are responsible for reviewing listings and vendor ratings before purchasing. Vendor accounts go through a verification step before certain trust indicators are shown, but verification does not make CampusHub a party to any transaction between a buyer and a seller.</p>
+      <h4 class="h3">4. Payments</h4>
+      <p class="post-body">Paid transactions (marketplace purchases and event tickets) are processed through Paystack. CampusHub never sees or stores your card details. A service fee is included in the displayed price on paid transactions to cover platform and payment-processing costs; free "place order" listings and free event tickets carry no fee.</p>
+      <h4 class="h3">5. Events &amp; ticketing</h4>
+      <p class="post-body">Event organizers are responsible for the accuracy of event details and for honoring valid tickets. Refunds for canceled or misrepresented events are handled case by case — contact the organizer first, then CampusHub if unresolved.</p>
+      <h4 class="h3">6. Conduct</h4>
+      <p class="post-body">Harassment, scamming, posting false lost &amp; found reports, or misusing the messaging system is not allowed. Every message can be reported for review. We may suspend or terminate accounts that violate these terms.</p>
+      <h4 class="h3">7. Changes</h4>
+      <p class="post-body">We may update these terms as the platform grows. Continued use after a change means you accept the updated terms.</p>
+      <h4 class="h3">8. Governing law</h4>
+      <p class="post-body">These terms are governed by the laws of Lagos State, Nigeria.</p>
+    `,
+  },
+  privacy: {
+    title: "Privacy Policy",
+    body: `
+      <p class="row-sub">Last updated: July 2026</p>
+      <h4 class="h3">1. What we collect</h4>
+      <p class="post-body">Account info you provide directly: name, email, matric number, level, and department (students); business name, category, description, phone, and location (vendors). Content you create: marketplace listings, event posts, campus feed posts, chat messages, study materials, and anything else you post. Usage data such as timestamps on your activity (e.g. when a message was sent, when an order was placed).</p>
+      <h4 class="h3">2. What we don't collect</h4>
+      <p class="post-body">We never see or store your card or bank details — payments and payouts are handled entirely by Paystack, and CampusHub only receives a confirmation that a payment succeeded or a payout account was created.</p>
+      <h4 class="h3">3. How it's used</h4>
+      <p class="post-body">To operate core features (marketplace, events, chat, study hub), to show your name/department/level to classmates where relevant (e.g. class announcements), and to verify vendor businesses. We don't sell your data or share it with advertisers.</p>
+      <h4 class="h3">4. Third-party services</h4>
+      <p class="post-body">Supabase hosts our database, authentication, file storage, and real-time messaging. Paystack processes payments and payouts. Both only receive the data needed to perform their part (e.g. Paystack receives your bank details only if you set up payouts as a vendor).</p>
+      <h4 class="h3">5. Data retention &amp; your rights</h4>
+      <p class="post-body">Your data is kept for as long as your account is active. You can request a copy of your data or account deletion by contacting us. Some records (e.g. completed order/payment history) may be retained longer for dispute resolution and legal compliance.</p>
+      <h4 class="h3">6. Moderation records</h4>
+      <p class="post-body">If you report a message, the reported content, your identity as the reporter, and the reported user are stored for admin review — this is necessary for the reporting system to function and isn't visible to other users.</p>
+      <h4 class="h3">7. Contact</h4>
+      <p class="post-body">Questions about this policy or your data can be sent through the app's support channel once available, or to the platform administrator directly.</p>
+    `,
+  },
+  cookies: {
+    title: "Cookie Use",
+    body: `
+      <p class="row-sub">Last updated: July 2026</p>
+      <p class="post-body">CampusHub doesn't use third-party advertising or tracking cookies. What we do use:</p>
+      <h4 class="h3">Authentication</h4>
+      <p class="post-body">Supabase Auth stores a session token in your browser's local storage so you stay logged in between visits. Without it, you'd have to log in every time.</p>
+      <h4 class="h3">Local preferences</h4>
+      <p class="post-body">A small amount of data is saved directly in your browser (not sent to any server): your dark/light mode preference, and your GPA/CGPA calculator entries, since those are personal scratch calculations with nothing to sync elsewhere.</p>
+      <h4 class="h3">Your control</h4>
+      <p class="post-body">Clearing your browser's site data for CampusHub will log you out and reset these local preferences. It won't affect anything stored in your account server-side (listings, messages, orders, etc.).</p>
+    `,
+  },
+};
+
+function showLegalDoc(type) {
+  const doc = LEGAL_DOCS[type];
+  if (!doc) return;
+  openModal(`${modalHead(doc.title)}${doc.body}`, true);
+}
+
 /* --- listing detail --- */
 async function showItem(id) {
   const l = state.listings.find((x) => x.id === id);
@@ -3956,6 +4112,10 @@ try {
       await hydrateFees();
       await hydrateConversations();
       startMyMessagesWatch();
+      // covers the "clicked the confirmation link, landed back here with
+      // a fresh session" case — completeAuth()'s login branch covers the
+      // "closed that tab and logged in manually later" case
+      await completeDeferredPayoutIfAny();
       return;
     }
   }
