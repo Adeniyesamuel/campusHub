@@ -111,6 +111,19 @@ const sbUploadMaterialFile = (userId, file) => {
 };
 const sbGetMaterialFileUrl = (path) => sb.storage.from("material-files").getPublicUrl(path).data.publicUrl;
 
+/* ---------- admin panel ---------- */
+const sbGetAllBusinesses = () =>
+  sb.from("businesses").select("*, owner:profiles!owner_id(name)").order("created_at", { ascending: false });
+const sbAdminSetBusinessVerification = (businessId, status) =>
+  sb.rpc("admin_set_business_verification", { p_business_id: businessId, p_status: status });
+
+const sbGetMessageReports = () =>
+  sb.from("message_reports")
+    .select("*, reporter:profiles!reporter_id(name), reported:profiles!reported_user_id(name)")
+    .order("created_at", { ascending: false });
+const sbMarkReportReviewed = (reportId) =>
+  sb.from("message_reports").update({ reviewed_at: new Date().toISOString() }).eq("id", reportId);
+
 /* ---------- profiles + businesses ---------- */
 const sbGetProfile = (userId) => sb.from("profiles").select().eq("id", userId).maybeSingle();
 const sbInsertProfile = (row) => sb.from("profiles").insert(row);

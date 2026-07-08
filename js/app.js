@@ -50,6 +50,8 @@ const state = {
   chatMessages: [],   // messages for the currently open conversation
   conversations: [],  // Messages inbox — loaded by hydrateConversations()
   unreadTotal: 0,     // sum of unread counts across all conversations
+  adminBusinesses: [], // admin-only — loaded by hydrateAdmin()
+  adminReports: [],    // admin-only — loaded by hydrateAdmin()
 
   /* ---- The logged-in vendor's own shop ---- */
   myShop: { followers: 0, reviews: [], orders: [] },
@@ -129,20 +131,26 @@ function render() {
   }
   document.body.classList.remove("unauthed");
 
-  // students don't see the vendor tab; non-students don't see Study
+  // students don't see the vendor tab; non-students don't see Study;
+  // the Admin tab is client-hidden for everyone but is_admin — the real
+  // enforcement is server-side (RLS/RPCs all gate on is_admin() too),
+  // this is just so non-admins don't see a dead-end nav item
   document.querySelectorAll('[data-tab="shop"]').forEach((b) =>
     b.classList.toggle("hidden", state.user.role !== "vendor"));
   document.querySelectorAll('[data-tab="study"]').forEach((b) =>
     b.classList.toggle("hidden", !state.user.level));
+  document.querySelectorAll('[data-tab="admin"]').forEach((b) =>
+    b.classList.toggle("hidden", !state.user.isAdmin));
   if (state.user.role !== "vendor" && state.tab === "shop") state.tab = "home";
   if (!state.user.level && state.tab === "study") state.tab = "home";
+  if (!state.user.isAdmin && state.tab === "admin") state.tab = "home";
 
   // nav highlighting (both navs)
   document.querySelectorAll("[data-tab]").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === state.tab));
   renderMessageBadge();
 
-  const screens = { home: homeScreen, market: marketScreen, events: eventsScreen, messages: messagesScreen, shop: shopScreen, study: studyScreen };
+  const screens = { home: homeScreen, market: marketScreen, events: eventsScreen, messages: messagesScreen, shop: shopScreen, study: studyScreen, admin: adminScreen };
   $("#content").innerHTML = screens[state.tab]();
   bindScreenEvents();
 }
@@ -410,6 +418,7 @@ function hydrateUser(profileRow, businessRow, via) {
     matric: profileRow.matric,
     level: profileRow.level,
     dept: profileRow.dept,
+    isAdmin: !!profileRow.is_admin,
     business: businessRow ? {
       id: businessRow.id,
       name: businessRow.name,
@@ -593,6 +602,26 @@ async function hydrateMaterials() {
       avg: agg.avg, count: agg.count, mine: myRatingByMaterial.get(r.id) || 0,
     };
   });
+}
+
+/* admin-only — skipped for everyone else. Real enforcement is
+   server-side (is_admin() in RLS/RPCs); this guard just avoids a
+   pointless fetch for the other 99% of users */
+async function hydrateAdmin() {
+  if (!state.user.isAdmin) return;
+
+  const { data: bizRows } = await sbGetAllBusinesses();
+  state.adminBusinesses = (bizRows || []).map((r) => ({
+    id: r.id, name: r.name, category: r.category, ownerName: r.owner?.name || "Unknown",
+    verified: r.verified, rejectedAt: r.rejected_at, createdAt: fmtRowTime(r.created_at),
+  }));
+
+  const { data: reportRows } = await sbGetMessageReports();
+  state.adminReports = (reportRows || []).map((r) => ({
+    id: r.id, messageText: r.message_text, reason: r.reason,
+    reporterName: r.reporter?.name || "Unknown", reportedName: r.reported?.name || "Unknown",
+    createdAt: fmtRowTime(r.created_at), reviewed: !!r.reviewed_at,
+  }));
 }
 
 /* loads the public marketplace feed for everyone, plus the vendor's own
@@ -812,6 +841,7 @@ async function completeAuth(via) {
   await hydrateLostFound();
   await hydrateClassInfo();
   await hydrateMaterials();
+  await hydrateAdmin();
   await hydrateMarketplace();
   await hydrateEvents();
   await hydratePayoutAccount();
@@ -1823,6 +1853,94 @@ function showExamForm(existing) {
     await hydrateClassInfo();
     closeModal(); render(); toast("Removed");
   });
+}
+
+/* ---------- ADMIN (vendor verification + message reports) ---------- */
+function adminScreen() {
+  const pending = state.adminBusinesses.filter((b) => !b.verified && !b.rejectedAt);
+  const decided = state.adminBusinesses.filter((b) => b.verified || b.rejectedAt);
+
+  const pendingRows = pending.length ? pending.map((b) => `
+    <div class="card row-item">
+      <div class="row-ico">🏪</div>
+      <div class="row-main">
+        <div class="row-title">${esc(b.name)}</div>
+        <div class="row-sub">${esc(b.category || "—")} · owner: ${esc(b.ownerName)} · ${esc(b.createdAt)}</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-accent btn-sm" data-verify-biz="${b.id}">Verify</button>
+        <button class="btn btn-ghost btn-sm" data-reject-biz="${b.id}" style="color:var(--rose-600)">Reject</button>
+      </div>
+    </div>`).join("") : `<div class="empty">No pending vendors — all caught up 🎉</div>`;
+
+  const decidedRows = decided.map((b) => `
+    <div class="card row-item">
+      <div class="row-ico">${b.verified ? "✅" : "🚫"}</div>
+      <div class="row-main">
+        <div class="row-title">${esc(b.name)}</div>
+        <div class="row-sub">${esc(b.category || "—")} · owner: ${esc(b.ownerName)}</div>
+      </div>
+      <span class="stock-pill ${b.verified ? "stock-ok" : "stock-low"}">${b.verified ? "Verified" : "Rejected"}</span>
+    </div>`).join("");
+
+  const reportRows = state.adminReports.length ? state.adminReports.map((r) => `
+    <div class="card">
+      <div class="row-sub">${esc(r.createdAt)} · reported ${esc(r.reportedName)} · by ${esc(r.reporterName)}</div>
+      <p class="post-body">${esc(r.messageText)}</p>
+      ${r.reason ? `<div class="row-sub">Reason: ${esc(r.reason)}</div>` : ""}
+      <div style="margin-top:8px">
+        ${r.reviewed
+          ? `<span class="stock-pill stock-ok">Reviewed</span>`
+          : `<button class="btn btn-accent btn-sm" data-review-report="${r.id}">Mark reviewed</button>`}
+      </div>
+    </div>`).join("") : `<div class="empty">No reports yet</div>`;
+
+  return `
+    <div class="section-head">
+      <div><div class="eyebrow">Admin</div><h1 class="h1">Launch controls</h1></div>
+    </div>
+
+    <div class="section-head" style="padding-top:6px">
+      <div><div class="eyebrow">Vendor verification</div><h3 class="h3">Pending queue</h3></div>
+    </div>
+    ${pendingRows}
+    ${decided.length ? `
+    <div class="section-head" style="padding-top:20px">
+      <div><div class="eyebrow">Already reviewed</div><h3 class="h3">Verified &amp; rejected</h3></div>
+    </div>
+    ${decidedRows}` : ""}
+
+    <div class="section-head" style="padding-top:24px">
+      <div><div class="eyebrow">Report moderation</div><h3 class="h3">Message reports</h3></div>
+    </div>
+    ${reportRows}`;
+}
+
+function bindAdminEvents() {
+  document.querySelectorAll("[data-verify-biz]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = "…";
+      const { error } = await sbAdminSetBusinessVerification(b.dataset.verifyBiz, "verified");
+      if (error) { b.disabled = false; b.textContent = "Verify"; return toast("Couldn't verify: " + error.message); }
+      await hydrateAdmin();
+      render(); toast("Vendor verified ✅");
+    }));
+  document.querySelectorAll("[data-reject-biz]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = "…";
+      const { error } = await sbAdminSetBusinessVerification(b.dataset.rejectBiz, "rejected");
+      if (error) { b.disabled = false; b.textContent = "Reject"; return toast("Couldn't reject: " + error.message); }
+      await hydrateAdmin();
+      render(); toast("Vendor rejected");
+    }));
+  document.querySelectorAll("[data-review-report]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = "…";
+      const { error } = await sbMarkReportReviewed(b.dataset.reviewReport);
+      if (error) { b.disabled = false; b.textContent = "Mark reviewed"; return toast("Couldn't update: " + error.message); }
+      await hydrateAdmin();
+      render(); toast("Marked reviewed");
+    }));
 }
 
 function bindStudyEvents() {
@@ -3785,6 +3903,9 @@ function bindScreenEvents() {
 
   // study hub
   bindStudyEvents();
+
+  // admin
+  bindAdminEvents();
 }
 
 /* tab navigation (sidebar + bottom nav share data-tab) */
@@ -3828,6 +3949,7 @@ try {
       await hydrateLostFound();
       await hydrateClassInfo();
       await hydrateMaterials();
+      await hydrateAdmin();
       await hydrateMarketplace();
       await hydrateEvents();
       await hydratePayoutAccount();
