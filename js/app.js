@@ -371,7 +371,7 @@ function authScreen() {
           <button class="continue-btn" id="pwContinue" disabled>${signup ? "Create account" : "Log in"}</button>
 
           ${signup
-            ? `<p class="auth-terms">By continuing, you agree to our <button class="legal-link" data-legal="terms">Terms of Service</button>, <button class="legal-link" data-legal="privacy">Privacy Policy</button> and <button class="legal-link" data-legal="cookies">Cookie Use</button>.</p>`
+            ? `<p class="auth-terms">By continuing, you agree to our <button class="legal-link" data-legal="terms">Terms of Service</button>, <button class="legal-link" data-legal="privacy">Privacy Policy</button>, <button class="legal-link" data-legal="cookies">Cookie Use</button>, <button class="legal-link" data-legal="conduct">Acceptable Use Policy</button> and <button class="legal-link" data-legal="refunds">Refund &amp; Dispute Policy</button>.</p>`
             : `<p class="auth-terms"><b>Forgot password?</b> Reset comes in the real build.</p>`}
         </div>
       </div>`;
@@ -398,7 +398,7 @@ function authScreen() {
           <input id="authId" class="auth-input" placeholder="Email or phone number" autocomplete="username" />
           <button class="continue-btn" id="authContinue" disabled>Continue</button>
 
-          <p class="auth-terms">By continuing, you agree to our <button class="legal-link" data-legal="terms">Terms of Service</button>, <button class="legal-link" data-legal="privacy">Privacy Policy</button> and <button class="legal-link" data-legal="cookies">Cookie Use</button>.</p>
+          <p class="auth-terms">By continuing, you agree to our <button class="legal-link" data-legal="terms">Terms of Service</button>, <button class="legal-link" data-legal="privacy">Privacy Policy</button>, <button class="legal-link" data-legal="cookies">Cookie Use</button>, <button class="legal-link" data-legal="conduct">Acceptable Use Policy</button> and <button class="legal-link" data-legal="refunds">Refund &amp; Dispute Policy</button>.</p>
 
           <p class="auth-switch">
             Already have an account?
@@ -3221,7 +3221,7 @@ const LEGAL_DOCS = {
       <h4 class="h3">6. Moderation records</h4>
       <p class="post-body">If you report a message, the reported content, your identity as the reporter, and the reported user are stored for admin review — this is necessary for the reporting system to function and isn't visible to other users.</p>
       <h4 class="h3">7. Contact</h4>
-      <p class="post-body">Questions about this policy or your data can be sent through the app's support channel once available, or to the platform administrator directly.</p>
+      <p class="post-body">Questions about this policy or your data can be sent to adeniyesamuel10+support@gmail.com.</p>
     `,
   },
   cookies: {
@@ -3235,6 +3235,44 @@ const LEGAL_DOCS = {
       <p class="post-body">A small amount of data is saved directly in your browser (not sent to any server): your dark/light mode preference, and your GPA/CGPA calculator entries, since those are personal scratch calculations with nothing to sync elsewhere.</p>
       <h4 class="h3">Your control</h4>
       <p class="post-body">Clearing your browser's site data for CampusHub will log you out and reset these local preferences. It won't affect anything stored in your account server-side (listings, messages, orders, etc.).</p>
+    `,
+  },
+  conduct: {
+    title: "Acceptable Use Policy",
+    body: `
+      <p class="row-sub">Last updated: July 2026</p>
+      <p class="post-body">This policy applies to everyone on CampusHub — students and vendors alike — across the marketplace, events, chat, campus feed, and study hub.</p>
+      <h4 class="h3">1. Prohibited activities</h4>
+      <p class="post-body">The following are not allowed on CampusHub:</p>
+      <p class="post-body">
+        • Fraud or scamming other users — including accepting payment for a listing or ticket and then failing to deliver, going silent, or trying to avoid a dispute by blocking the other party while an order or ticket purchase between you is still unresolved. This last case is actively prevented at the platform level: you cannot block someone you have an active paid transaction with.<br>
+        • Posting fake, counterfeit, or knowingly misleading listings or event details.<br>
+        • Harassment, threats, hate speech, or abusive behavior toward any user.<br>
+        • Impersonating another person, a business, or CampusHub staff.<br>
+        • Misrepresenting your level or department to access class announcements, timetables, exams, assignments, or study materials meant for a class you're not in.<br>
+        • Spamming — repeated, irrelevant, or promotional posts in the campus feed, class channels, or chat.<br>
+        • Uploading study materials you don't have the right to share — for example content a lecturer has marked confidential, or someone else's copyrighted work.<br>
+        • Using CampusHub for anything illegal under Nigerian law.
+      </p>
+      <h4 class="h3">2. Consequences</h4>
+      <p class="post-body">Depending on severity and history, violations can lead to a warning, removal of the listing/event/post in question, temporary account suspension, or a permanent ban. Fraud, harassment, or other serious violations may be reported to University of Lagos authorities and/or the police, in addition to any action taken on your CampusHub account.</p>
+      <h4 class="h3">3. How reports are handled</h4>
+      <p class="post-body">Any chat message can be reported directly (the ⚑ Report button on a message). Reported messages — including the message content, the sender, and the reporter — go to a review queue that only admins can see; other users, including the person you reported, never see that a report was filed. Admins review each report and act based on what's actually in it.</p>
+    `,
+  },
+  refunds: {
+    title: "Refund & Dispute Policy",
+    body: `
+      <p class="row-sub">Last updated: July 2026</p>
+      <p class="post-body">This describes what CampusHub actually does today for refunds and disputes — not aspirational guarantees.</p>
+      <h4 class="h3">1. Events — cancellations</h4>
+      <p class="post-body">If an organizer cancels an event, every paid ticket holder is refunded automatically through Paystack — no request needed. Your ticket updates to "Refunded" in My Tickets once it's processed.</p>
+      <h4 class="h3">2. Events — reschedules</h4>
+      <p class="post-body">If an organizer reschedules an event's date or venue, every ticket holder is notified the moment it happens (via chat), with the old details, new details, and the organizer's reason. You can request a full, self-service refund for your ticket within 72 hours of that notification — no approval needed. After 72 hours, this refund option is no longer available through the app; you'd need to contact the organizer directly.</p>
+      <h4 class="h3">3. Marketplace purchases</h4>
+      <p class="post-body">CampusHub does not hold or escrow marketplace payments — when you buy a listing, your payment (minus the platform fee) goes directly to the vendor at the time of purchase. There is currently no built-in refund flow for marketplace orders (the one exception: if an item sells out in the brief window between your checkout and confirmation, that specific case is refunded automatically). Delivery issues, item condition, or any other problem with a marketplace order is between you and the vendor — message them directly through chat first. Because of this, choosing verified or highly-rated vendors and confirming details before paying is genuinely worth doing, not just a suggestion.</p>
+      <h4 class="h3">4. Escalating a problem</h4>
+      <p class="post-body">If a conversation with a vendor or organizer isn't resolving something, report the relevant message using the ⚑ Report button in chat — it goes straight to admin review. For anything the report system doesn't cover, contact adeniyesamuel10+support@gmail.com.</p>
     `,
   },
 };

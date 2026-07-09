@@ -6,6 +6,10 @@ items off as they get built — this file is a living checklist, not a historica
 
 ## Launch blockers
 
+- [ ] **Support contact is a personal Gmail placeholder.** The Privacy Policy and the
+      new Refund & Dispute Policy both list `adeniyesamuel10+support@gmail.com` as the
+      support contact — swap this for a proper `support@[domain]` address once the app
+      is renamed (see "App rename" below) and a real domain is set up.
 - [ ] **Confirm Paystack subaccounts + transaction splits work in live mode.** No
       documentation found either confirming or denying support on a Starter Business
       account specifically — everything is fully verified in test mode, but this needs
