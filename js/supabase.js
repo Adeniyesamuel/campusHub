@@ -173,13 +173,43 @@ const sbGetPublicSalesCount = (shopId) => sb.rpc("get_shop_sales_count", { targe
 /* ---------- configurable platform fees ---------- */
 const sbGetPlatformFees = () => sb.from("platform_fees").select();
 
+/* ---------- vendor-requested verification ---------- */
+const sbGetVerificationRequirements = () =>
+  sb.from("verification_requirements").select().eq("key", "vendor").maybeSingle();
+const sbRequestBusinessVerification = (businessId) =>
+  sb.rpc("request_business_verification", { p_business_id: businessId });
+
 /* ---------- events + tickets ---------- */
-const sbGetEvents = () => sb.from("events").select("*, ticket_tiers(*)").order("starts_at", { ascending: true });
+// afterISO: public browsing only — hides events once they're far enough
+// in the past (a grace window, not an instant cutoff at start time).
+// Omit it entirely for "My Events", which shows everything regardless of date.
+const sbGetEvents = (afterISO) => {
+  // cancelled events never show up in public browsing, regardless of
+  // date — My Events (below) still shows them, for the organizer's own record
+  let q = sb.from("events").select("*, ticket_tiers(*)").is("cancelled_at", null).order("starts_at", { ascending: true });
+  if (afterISO) q = q.gte("starts_at", afterISO);
+  return q;
+};
+const sbGetMyEvents = (organizerId) =>
+  sb.from("events").select("*, ticket_tiers(*)").eq("organizer_id", organizerId).order("starts_at", { ascending: false });
 const sbInsertEvent = (row) => sb.from("events").insert(row).select().single();
 const sbInsertTicketTiers = (rows) => sb.from("ticket_tiers").insert(rows).select();
+// only ever send name/description/quantity_total — price is deliberately
+// not exposed to editing (see migration 0022)
+const sbUpdateTicketTier = (tierId, patch) => sb.from("ticket_tiers").update(patch).eq("id", tierId);
+const sbCancelEvent = (eventId) => sb.functions.invoke("cancel-event", { body: { event_id: eventId } });
+const sbRescheduleEvent = (eventId, newStartsAtISO, newVenue, reason) =>
+  sb.rpc("reschedule_event", { p_event_id: eventId, p_new_starts_at: newStartsAtISO, p_new_venue: newVenue, p_reason: reason });
+const sbRequestRescheduleRefund = (ticketId) =>
+  sb.functions.invoke("reschedule-refund", { body: { ticket_id: ticketId } });
 const sbGetTierSoldCounts = () => sb.rpc("get_tier_sold_counts");
+// includes refunded tickets, not just paid ones — a cancelled/refunded
+// purchase must stay visible in the buyer's own history, never vanish.
+// pulls the event's reschedule fields too, so the buyer's own ticket
+// card can show the reschedule notice + offer the 72-hour refund action
+// without a second round trip.
 const sbGetMyTickets = (buyerId) =>
-  sb.from("tickets").select("id, qty, total, code, used_at, ticket_tiers(name, price, events(title))").eq("buyer_id", buyerId).eq("status", "paid").order("created_at", { ascending: false });
+  sb.from("tickets").select("id, qty, total, code, used_at, status, ticket_tiers(name, price, events(id, title, cancelled_at, rescheduled_at, reschedule_reason, rescheduled_from_starts_at, rescheduled_from_venue))").eq("buyer_id", buyerId).in("status", ["paid", "refunded"]).order("created_at", { ascending: false });
 const sbInsertTickets = (rows) => sb.from("tickets").insert(rows).select();
 // reference is no longer accepted here — confirm-ticket reads the
 // reference it stored itself at reservation time (see init-ticket-payment)

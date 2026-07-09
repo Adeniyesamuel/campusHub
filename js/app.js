@@ -59,9 +59,14 @@ const state = {
   // sane defaults matching platform_fees seed data — overwritten by
   // hydrateFees() as soon as we can reach the database
   fees: { events: { percent: 5, min_fee: 0 }, marketplace: { percent: 2.5, min_fee: 100 } },
+  // sane defaults matching verification_requirements seed data —
+  // overwritten by hydrateVerificationRequirements()
+  verificationRequirements: { minSales: 5, minAvgRating: 4.0, minRatingCount: 3 },
 
   /* ---- Study hub ---- */
   studyTab: "class",  // class | materials | cgpa
+  eventsTab: "browse", // browse | myEvents
+  myEvents: [], // events I organize, past + future — see hydrateEvents()
   pollChangingIds: [], // poll ids currently showing options again to re-vote
   classroom: {
     announcements: [], // loaded from Supabase after login — see hydrateClassInfo()
@@ -448,6 +453,8 @@ function hydrateUser(profileRow, businessRow, via) {
       social: businessRow.social_handle,
       cac: businessRow.cac_number,
       verified: businessRow.verified,
+      rejectedAt: businessRow.rejected_at,
+      verificationRequestedAt: businessRow.verification_requested_at,
     } : null,
   };
   // avatar shows the user's initial
@@ -631,8 +638,9 @@ async function hydrateAdmin() {
 
   const { data: bizRows } = await sbGetAllBusinesses();
   state.adminBusinesses = (bizRows || []).map((r) => ({
-    id: r.id, name: r.name, category: r.category, ownerName: r.owner?.name || "Unknown",
-    verified: r.verified, rejectedAt: r.rejected_at, createdAt: fmtRowTime(r.created_at),
+    id: r.id, ownerId: r.owner_id, name: r.name, category: r.category, ownerName: r.owner?.name || "Unknown",
+    verified: r.verified, rejectedAt: r.rejected_at, verificationRequestedAt: r.verification_requested_at,
+    createdAt: fmtRowTime(r.created_at),
   }));
 
   const { data: reportRows } = await sbGetMessageReports();
@@ -679,11 +687,16 @@ async function hydrateMarketplace() {
 /* loads the public events feed (with computed tier availability) for
    everyone, plus the logged-in user's own paid tickets */
 async function hydrateEvents() {
-  const { data: eventRows } = await sbGetEvents();
+  // public browsing hides events more than 8 hours past their start —
+  // a grace window, not an instant cutoff, so an event still likely in
+  // progress doesn't vanish from browsing right as it begins
+  const cutoff = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
+  const { data: eventRows } = await sbGetEvents(cutoff);
+  const { data: myEventRows } = await sbGetMyEvents(state.user.id);
   const { data: soldRows } = await sbGetTierSoldCounts();
   const soldByTier = new Map((soldRows || []).map((r) => [r.tier_id, Number(r.sold)]));
 
-  state.events = (eventRows || []).map((ev) => ({
+  const mapEvent = (ev) => ({
     id: ev.id,
     title: ev.title,
     startsAt: ev.starts_at,
@@ -691,14 +704,26 @@ async function hydrateEvents() {
     tag: ev.tag,
     img: ev.image_url,
     organizer: ev.organizer_name,
+    organizerId: ev.organizer_id,
+    cancelledAt: ev.cancelled_at,
+    rescheduledAt: ev.rescheduled_at,
+    rescheduledFromStartsAt: ev.rescheduled_from_starts_at,
+    rescheduledFromVenue: ev.rescheduled_from_venue,
+    rescheduleReason: ev.reschedule_reason,
     tiers: (ev.ticket_tiers || []).map((t) => ({
       id: t.id,
       name: t.name,
       price: t.price,
       desc: t.description,
+      quantityTotal: t.quantity_total,
       left: Math.max(0, t.quantity_total - (soldByTier.get(t.id) || 0)),
     })),
-  }));
+  });
+
+  state.events = (eventRows || []).map(mapEvent);
+  // organizers see every event they've ever hosted, past or future —
+  // unaffected by the public-browsing grace window above
+  state.myEvents = (myEventRows || []).map(mapEvent);
 
   const { data: ticketRows } = await sbGetMyTickets(state.user.id);
   state.tickets = (ticketRows || []).map((t) => ({
@@ -709,6 +734,13 @@ async function hydrateEvents() {
     total: t.total,
     code: t.code,
     usedAt: t.used_at,
+    status: t.status,
+    refunded: t.status === "refunded",
+    cancelledAt: t.ticket_tiers?.events?.cancelled_at,
+    rescheduledAt: t.ticket_tiers?.events?.rescheduled_at,
+    rescheduleReason: t.ticket_tiers?.events?.reschedule_reason,
+    rescheduledFromStartsAt: t.ticket_tiers?.events?.rescheduled_from_starts_at,
+    rescheduledFromVenue: t.ticket_tiers?.events?.rescheduled_from_venue,
   }));
 
   render();
@@ -721,6 +753,17 @@ async function hydrateFees() {
   (data || []).forEach((row) => {
     if (state.fees[row.key]) state.fees[row.key] = { percent: Number(row.percent), min_fee: row.min_fee };
   });
+}
+
+async function hydrateVerificationRequirements() {
+  const { data } = await sbGetVerificationRequirements();
+  if (data) {
+    state.verificationRequirements = {
+      minSales: data.min_completed_sales,
+      minAvgRating: Number(data.min_avg_rating),
+      minRatingCount: data.min_rating_count,
+    };
+  }
 }
 
 /* loads the logged-in user's payout account status (vendor or event
@@ -893,6 +936,7 @@ async function completeAuth(via) {
   await hydrateEvents();
   await hydratePayoutAccount();
   await hydrateFees();
+  await hydrateVerificationRequirements();
   await hydrateConversations();
   startMyMessagesWatch();
   await completeDeferredPayoutIfAny();
@@ -1348,6 +1392,246 @@ const qrSvg = (text) => {
 };
 
 function eventsScreen() {
+  const segHTML = `
+    <div class="study-seg">
+      <button class="study-seg-btn ${state.eventsTab === "browse" ? "active" : ""}" data-events-tab="browse">🎉 Browse</button>
+      <button class="study-seg-btn ${state.eventsTab === "myEvents" ? "active" : ""}" data-events-tab="myEvents">🎟️ My Events</button>
+    </div>`;
+
+  const head = `
+    <div class="section-head">
+      <div>
+        <div class="eyebrow">Events &amp; tickets</div>
+        <h1 class="h1">Don't miss out</h1>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" data-act="open-scan">🔍 Scan tickets</button>
+        <button class="btn btn-accent btn-sm" data-act="open-host">＋ Host event</button>
+      </div>
+    </div>
+    ${segHTML}`;
+
+  if (state.eventsTab === "myEvents") return head + myEventsTabHTML();
+  return head + browseEventsTabHTML();
+}
+
+function myEventsTabHTML() {
+  const rows = state.myEvents.length ? state.myEvents.map((ev) => {
+    const past = new Date(ev.startsAt) < new Date();
+    const tierRows = ev.tiers.map((t) => `
+      <div class="row-item" style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div class="row-main">
+          <div class="row-title" style="font-size:13px">${esc(t.name)}</div>
+          <div class="row-sub">${t.left} left of ${t.quantityTotal} · ${naira(t.price)}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" data-edit-tier="${t.id}">Rename</button>
+          ${t.left <= 0 ? `<button class="btn btn-accent btn-sm" data-restock-tier="${t.id}">Restock</button>` : ""}
+        </div>
+      </div>`).join("");
+    return `
+    <div class="card">
+      <div class="row-title">
+        ${esc(ev.title)}
+        ${ev.cancelledAt ? '<span class="stock-pill stock-low" style="margin-left:6px">Cancelled</span>' : past ? '<span class="stock-pill stock-low" style="margin-left:6px">Past</span>' : ""}
+      </div>
+      <div class="row-sub">${esc(fmtEventDateTime(ev.startsAt))} · 📍 ${esc(ev.venue)}</div>
+      ${ev.rescheduledAt ? `<div class="row-sub" style="margin-top:6px;color:var(--rose-600)">Rescheduled from ${esc(fmtEventDateTime(ev.rescheduledFromStartsAt))} at ${esc(ev.rescheduledFromVenue)} — ${esc(ev.rescheduleReason)}</div>` : ""}
+      <div style="margin-top:10px">${tierRows || '<div class="row-sub">No ticket tiers</div>'}</div>
+      ${ev.cancelledAt ? "" : `
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" data-add-tier="${ev.id}">＋ Add ticket type</button>
+        ${ev.rescheduledAt ? "" : `<button class="btn btn-ghost btn-sm" data-reschedule-event="${ev.id}">📅 Reschedule</button>`}
+        <button class="btn btn-ghost btn-sm" data-cancel-event="${ev.id}" style="color:var(--rose-600)">Delete / Cancel event</button>
+      </div>`}
+    </div>`;
+  }).join("") : `<div class="empty">You haven't hosted any events yet</div>`;
+  return `<div class="events-grid" style="display:grid;gap:12px">${rows}</div>`;
+}
+
+function findMyTier(tierId) {
+  for (const ev of state.myEvents) {
+    const t = ev.tiers.find((x) => x.id === tierId);
+    if (t) return t;
+  }
+  return null;
+}
+
+function showTierRenameForm(tierId, name, desc) {
+  openModal(`
+    ${modalHead("Rename ticket type")}
+    <input id="tierName" class="input" placeholder="Name" value="${esc(name)}" />
+    <textarea id="tierDesc" class="input" rows="2" placeholder="Description (optional)">${esc(desc || "")}</textarea>
+    <button class="btn btn-primary btn-block" id="tierRenameGo">Save</button>
+  `);
+  $("#tierRenameGo").addEventListener("click", async () => {
+    const newName = $("#tierName").value.trim();
+    if (!newName) return toast("Give it a name");
+    const btn = $("#tierRenameGo");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const { error } = await sbUpdateTicketTier(tierId, { name: newName, description: $("#tierDesc").value.trim() || null });
+    if (error) { btn.disabled = false; btn.textContent = "Save"; return toast("Couldn't save: " + error.message); }
+    await hydrateEvents();
+    closeModal(); toast("Ticket type updated");
+  });
+}
+
+function showRestockForm(tierId, currentTotal) {
+  openModal(`
+    ${modalHead("Restock ticket type")}
+    <p class="row-sub" style="margin-bottom:10px">Currently ${currentTotal} total spots. How many more do you want to add?</p>
+    <input id="restockQty" class="input" type="number" min="1" placeholder="e.g. 20" />
+    <button class="btn btn-primary btn-block" id="restockGo">Add spots</button>
+  `);
+  $("#restockGo").addEventListener("click", async () => {
+    const addQty = Number($("#restockQty").value);
+    if (!addQty || addQty < 1) return toast("Enter how many more spots to add");
+    const btn = $("#restockGo");
+    btn.disabled = true; btn.textContent = "Saving…";
+    const { error } = await sbUpdateTicketTier(tierId, { quantity_total: currentTotal + addQty });
+    if (error) { btn.disabled = false; btn.textContent = "Add spots"; return toast("Couldn't restock: " + error.message); }
+    await hydrateEvents();
+    closeModal(); toast(`Added ${addQty} more spots 🎟️`);
+  });
+}
+
+function showAddTierForm(eventId) {
+  openModal(`
+    ${modalHead("Add a ticket type")}
+    <input id="newTierName" class="input" placeholder="Name (e.g. VIP)" />
+    <div class="phone-row">
+      <input id="newTierPrice" class="input" type="number" min="0" placeholder="Price ₦ (0 = free)" />
+      <input id="newTierQty" class="input" type="number" min="1" placeholder="Quantity available" />
+    </div>
+    <button class="btn btn-primary btn-block" id="newTierGo">Add ticket type</button>
+  `);
+  $("#newTierGo").addEventListener("click", async () => {
+    const name = $("#newTierName").value.trim();
+    const price = Number($("#newTierPrice").value);
+    const qty = Number($("#newTierQty").value);
+    if (!name || qty < 1) return toast("Give it a name and a quantity");
+    const btn = $("#newTierGo");
+    btn.disabled = true; btn.textContent = "Adding…";
+    const { error } = await sbInsertTicketTiers([{ event_id: eventId, name, price: price || 0, quantity_total: qty }]);
+    if (error) { btn.disabled = false; btn.textContent = "Add ticket type"; return toast("Couldn't add: " + error.message); }
+    await hydrateEvents();
+    closeModal(); toast("Ticket type added");
+  });
+}
+
+/* sold count is computed from already-loaded tier data (quantityTotal -
+   left), no extra query needed — just a preview though, the server
+   decides for real which path (delete vs refund-and-cancel) applies */
+function showCancelEventConfirm(event) {
+  const sold = event.tiers.reduce((s, t) => s + (t.quantityTotal - t.left), 0);
+  const willDelete = sold === 0;
+  openModal(`
+    ${modalHead(willDelete ? "Delete this event?" : "Cancel this event?")}
+    <p class="row-sub" style="margin-bottom:14px">
+      ${willDelete
+        ? "No tickets have been sold yet, so this event can be permanently deleted. This cannot be undone."
+        : `${sold} ticket${sold === 1 ? " has" : "s have"} already been sold. Cancelling will automatically refund every ticket holder via Paystack and mark the event cancelled — it will stay visible in your My Events and to ticket holders, but disappear from public browsing. This cannot be undone.`}
+    </p>
+    <button class="btn btn-primary btn-block" id="cancelEventGo" style="background:var(--rose-600)">${willDelete ? "Delete event" : "Cancel event & refund everyone"}</button>
+    <button class="btn btn-ghost btn-block" data-close style="margin-top:8px">Never mind</button>
+  `);
+  $("#cancelEventGo").addEventListener("click", async () => {
+    const btn = $("#cancelEventGo");
+    btn.disabled = true; btn.textContent = "Working…";
+    const { data, error } = await sbCancelEvent(event.id);
+    if (error || data?.error) {
+      const msg = (data && data.error) || await edgeErrorMessage(error, "Couldn't process that");
+      btn.disabled = false; btn.textContent = willDelete ? "Delete event" : "Cancel event & refund everyone";
+      return toast(msg);
+    }
+    await hydrateEvents();
+    closeModal();
+    toast(data.action === "deleted" ? "Event deleted" : `Event cancelled — ${data.refunded_count} ticket(s) refunded`);
+  });
+}
+
+/* one reschedule per event ever (enforced server-side too) — title is
+   never editable here, only date/time/venue, and a reason is required
+   since it's stored permanently and shown on the event's public card */
+function showRescheduleForm(event) {
+  const d = new Date(event.startsAt);
+  const pad = (n) => String(n).padStart(2, "0");
+  const curDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const curTime = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  openModal(`
+    ${modalHead("Reschedule event")}
+    <p class="row-sub" style="margin-bottom:14px">Only use this for genuine emergencies (venue issues, safety, etc). You can only reschedule an event once. Every ticket holder is notified the moment you save this, and can request a full refund within 72 hours.</p>
+    <div class="field-label"><span class="req">*</span>New date &amp; time</div>
+    <div class="phone-row">
+      <input id="rsDate" class="input" type="date" value="${curDate}" />
+      <input id="rsTime" class="input" type="time" value="${curTime}" />
+    </div>
+    <div class="field-label"><span class="req">*</span>New venue</div>
+    <input id="rsVenue" class="input" placeholder="e.g. Multipurpose Hall" value="${esc(event.venue)}" />
+    <div class="field-label"><span class="req">*</span>Reason (shown publicly on the event)</div>
+    <textarea id="rsReason" class="input" rows="3" placeholder="e.g. Original venue flooded, moving to a new hall"></textarea>
+    <button class="btn btn-primary btn-block" id="rsGo" style="background:var(--rose-600)">Reschedule &amp; notify ticket holders</button>
+    <button class="btn btn-ghost btn-block" data-close style="margin-top:8px">Never mind</button>
+  `);
+  $("#rsGo").addEventListener("click", async () => {
+    const date = $("#rsDate").value.trim();
+    const time = $("#rsTime").value.trim();
+    const venue = $("#rsVenue").value.trim();
+    const reason = $("#rsReason").value.trim();
+    if (!date || !time || !venue) return toast("Fill in the new date, time and venue");
+    if (!reason) return toast("A reason is required");
+    const newStartsAt = new Date(`${date}T${time}`).toISOString();
+    const btn = $("#rsGo");
+    btn.disabled = true; btn.textContent = "Rescheduling…";
+    const { error } = await sbRescheduleEvent(event.id, newStartsAt, venue, reason);
+    if (error) { btn.disabled = false; btn.textContent = "Reschedule & notify ticket holders"; return toast("Couldn't reschedule: " + error.message); }
+    await hydrateEvents();
+    closeModal(); toast("Event rescheduled — ticket holders notified");
+  });
+}
+
+/* preview only shows what the server already decided is true (a
+   72-hour window from rescheduled_at); reschedule-refund re-checks the
+   window itself server-side, this is just so the button doesn't appear
+   to work when it's already expired */
+function showRequestRescheduleRefundConfirm(ticket) {
+  openModal(`
+    ${modalHead("Request a refund?")}
+    <p class="row-sub" style="margin-bottom:14px">This event was rescheduled. Since the new date/venue may not work for you, you can request a full refund for this ticket. This cannot be undone.</p>
+    <button class="btn btn-primary btn-block" id="rescheduleRefundGo" style="background:var(--rose-600)">Request refund</button>
+    <button class="btn btn-ghost btn-block" data-close style="margin-top:8px">Never mind</button>
+  `);
+  $("#rescheduleRefundGo").addEventListener("click", async () => {
+    const btn = $("#rescheduleRefundGo");
+    btn.disabled = true; btn.textContent = "Working…";
+    const { data, error } = await sbRequestRescheduleRefund(ticket.id);
+    if (error || data?.error) {
+      const msg = (data && data.error) || await edgeErrorMessage(error, "Couldn't process that");
+      btn.disabled = false; btn.textContent = "Request refund";
+      return toast(msg);
+    }
+    await hydrateEvents();
+    closeModal();
+    toast("Refund requested — you'll be refunded shortly");
+  });
+}
+
+/* shown on a paid, non-refunded ticket whose event was rescheduled —
+   the 72h window is only a display hint here (reschedule-refund
+   re-checks it server-side), so the button never appears once the
+   client-side clock says it's expired */
+function rescheduleNoticeHTML(t) {
+  const withinWindow = Date.now() - new Date(t.rescheduledAt).getTime() <= 72 * 60 * 60 * 1000;
+  return `
+    <div class="row-sub" style="margin-top:12px;color:var(--rose-600)">
+      Rescheduled from ${esc(fmtEventDateTime(t.rescheduledFromStartsAt))} at ${esc(t.rescheduledFromVenue)} — ${esc(t.rescheduleReason)}
+    </div>
+    ${withinWindow
+      ? `<button class="btn btn-ghost btn-sm" data-request-reschedule-refund="${t.id}" style="margin-top:8px">Request refund (event rescheduled)</button>`
+      : `<div class="row-sub" style="margin-top:6px">The 72-hour refund window for this reschedule has closed.</div>`}`;
+}
+
+function browseEventsTabHTML() {
   const cards = state.events.map((ev) => {
     const open = ev.tiers.filter((t) => t.left > 0);
     const minPrice = open.length ? Math.min(...open.map((t) => t.price)) : null;
@@ -1366,6 +1650,7 @@ function eventsScreen() {
             <div class="event-meta">${esc(fmtEventDateTime(ev.startsAt))}</div>
             <div class="event-meta">📍 ${esc(ev.venue)}</div>
             <div class="event-meta">By ${esc(ev.organizer)}</div>
+            ${ev.rescheduledAt ? `<div class="event-meta" style="color:var(--rose-600)">Rescheduled from ${esc(fmtEventDateTime(ev.rescheduledFromStartsAt))} at ${esc(ev.rescheduledFromVenue)} — ${esc(ev.rescheduleReason)}</div>` : ""}
           </div>
           <div>
             <div class="event-price">${priceLabel}</div>
@@ -1384,26 +1669,21 @@ function eventsScreen() {
        <div class="events-grid">
        ${state.tickets.map((t) => `
         <div class="ticket">
-          <div class="ticket-label">CampusHub Ticket ${t.usedAt ? '<span class="stock-pill stock-ok" style="margin-left:8px">Used ✅</span>' : ""}</div>
+          <div class="ticket-label">CampusHub Ticket
+            ${t.refunded ? '<span class="stock-pill stock-low" style="margin-left:8px">Refunded</span>'
+              : t.usedAt ? '<span class="stock-pill stock-ok" style="margin-left:8px">Used ✅</span>' : ""}
+          </div>
           <div class="ticket-event">${esc(t.event)}</div>
           <div class="ticket-meta">${t.qty} × ${esc(t.tier)} · ${t.total === 0 ? "Free" : naira(t.total)}</div>
-          <div class="ticket-qr">${qrSvg(t.code)}</div>
-          <div class="ticket-code">${esc(t.code)}</div>
+          ${t.refunded
+            ? `<div class="row-sub" style="margin:12px 0">${t.cancelledAt ? "This event was cancelled — your ticket was refunded." : "This event was rescheduled and your ticket was refunded at your request."}</div>`
+            : `<div class="ticket-qr">${qrSvg(t.code)}</div><div class="ticket-code">${esc(t.code)}</div>
+               ${t.rescheduledAt ? rescheduleNoticeHTML(t) : ""}`}
         </div>`).join("")}
        </div>`
     : "";
 
   return `
-    <div class="section-head">
-      <div>
-        <div class="eyebrow">Events &amp; tickets</div>
-        <h1 class="h1">Don't miss out</h1>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-ghost btn-sm" data-act="open-scan">🔍 Scan tickets</button>
-        <button class="btn btn-accent btn-sm" data-act="open-host">＋ Host event</button>
-      </div>
-    </div>
     <div class="events-grid">${cards}</div>
     ${myTickets}`;
 }
@@ -1521,14 +1801,42 @@ function shopScreen() {
       <button class="btn btn-accent btn-sm" id="shopSetPayout">Set up</button>
     </div>`;
 
+  // selling stays open to everyone regardless of verification status —
+  // this only ever gates the trust badge, never the ability to sell
+  const biz = state.user.business;
+  const vr = state.verificationRequirements;
+  const meetsVerificationBar = state.sales.length >= vr.minSales
+    && ms.reviews.length >= vr.minRatingCount
+    && avg >= vr.minAvgRating;
+  const verificationBanner = !biz || biz.verified ? "" : biz.verificationRequestedAt ? `
+    <div class="card" style="border-color:var(--indigo-400);display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div style="font-size:22px">🛡️</div>
+      <div style="flex:1">
+        <div class="row-title">Verification requested</div>
+        <div class="row-sub">An admin will review your shop soon.</div>
+      </div>
+    </div>` : `
+    <div class="card" style="border-color:var(--orange-400);margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-size:22px">🛡️</div>
+        <div style="flex:1">
+          <div class="row-title">Get the verified badge</div>
+          <div class="row-sub">${state.sales.length}/${vr.minSales} completed sales · ${avg.toFixed(1)}★ avg (${ms.reviews.length}/${vr.minRatingCount} ratings, need ${vr.minAvgRating.toFixed(1)}+)</div>
+        </div>
+        ${meetsVerificationBar ? `<button class="btn btn-accent btn-sm" id="requestVerificationBtn">Request Verification</button>` : ""}
+      </div>
+      ${meetsVerificationBar ? "" : `<div class="row-sub" style="margin-top:8px">Keep selling and building your rating — you'll be able to request verification once you qualify.</div>`}
+    </div>`;
+
   return `
     <div class="section-head">
       <div>
-        <div class="eyebrow">My shop · ${esc(state.user.business && state.user.business.name ? state.user.business.name : "Your Business")} <span class="verified-badge">🛡️ Verified</span></div>
+        <div class="eyebrow">My shop · ${esc(biz && biz.name ? biz.name : "Your Business")} ${biz && biz.verified ? '<span class="verified-badge">🛡️ Verified</span>' : ""}</div>
         <h1 class="h1">Vendor dashboard</h1>
       </div>
     </div>
     ${payoutBanner}
+    ${verificationBanner}
 
     <div class="trust-strip">
       <div class="trust-stat"><b>👥 ${ms.followers}</b><span>followers</span></div>
@@ -1945,14 +2253,16 @@ function showExamForm(existing) {
 
 /* ---------- ADMIN (vendor verification + message reports) ---------- */
 function adminScreen() {
-  const pending = state.adminBusinesses.filter((b) => !b.verified && !b.rejectedAt);
+  // only vendors who've both met the thresholds and asked show up here —
+  // NOT every never-reviewed vendor, unlike before this chunk
+  const pending = state.adminBusinesses.filter((b) => !b.verified && !b.rejectedAt && b.verificationRequestedAt);
   const decided = state.adminBusinesses.filter((b) => b.verified || b.rejectedAt);
 
   const pendingRows = pending.length ? pending.map((b) => `
     <div class="card row-item">
       <div class="row-ico">🏪</div>
       <div class="row-main">
-        <div class="row-title">${esc(b.name)}</div>
+        <button class="row-title" data-open-shop="${b.ownerId}" style="background:none;border:none;padding:0;text-align:left;text-decoration:underline;cursor:pointer">${esc(b.name)}</button>
         <div class="row-sub">${esc(b.category || "—")} · owner: ${esc(b.ownerName)} · ${esc(b.createdAt)}</div>
       </div>
       <div style="display:flex;gap:6px">
@@ -1965,10 +2275,13 @@ function adminScreen() {
     <div class="card row-item">
       <div class="row-ico">${b.verified ? "✅" : "🚫"}</div>
       <div class="row-main">
-        <div class="row-title">${esc(b.name)}</div>
+        <button class="row-title" data-open-shop="${b.ownerId}" style="background:none;border:none;padding:0;text-align:left;text-decoration:underline;cursor:pointer">${esc(b.name)}</button>
         <div class="row-sub">${esc(b.category || "—")} · owner: ${esc(b.ownerName)}</div>
       </div>
-      <span class="stock-pill ${b.verified ? "stock-ok" : "stock-low"}">${b.verified ? "Verified" : "Rejected"}</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="stock-pill ${b.verified ? "stock-ok" : "stock-low"}">${b.verified ? "Verified" : "Rejected"}</span>
+        <button class="btn btn-ghost btn-sm" data-undo-biz="${b.id}">Undo</button>
+      </div>
     </div>`).join("");
 
   const reportRows = state.adminReports.length ? state.adminReports.map((r) => `
@@ -2029,6 +2342,16 @@ function bindAdminEvents() {
       await hydrateAdmin();
       render(); toast("Marked reviewed");
     }));
+  document.querySelectorAll("[data-undo-biz]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = "…";
+      const { error } = await sbAdminSetBusinessVerification(b.dataset.undoBiz, "pending");
+      if (error) { b.disabled = false; b.textContent = "Undo"; return toast("Couldn't undo: " + error.message); }
+      await hydrateAdmin();
+      render(); toast("Moved back to pending");
+    }));
+  document.querySelectorAll("[data-open-shop]").forEach((b) =>
+    b.addEventListener("click", () => openShop(b.dataset.openShop)));
 }
 
 function bindStudyEvents() {
@@ -3979,6 +4302,8 @@ function bindScreenEvents() {
   if (sellBtn) sellBtn.addEventListener("click", showSell);
 
   // events
+  document.querySelectorAll("[data-events-tab]").forEach((b) =>
+    b.addEventListener("click", () => { state.eventsTab = b.dataset.eventsTab; render(); }));
   document.querySelectorAll("[data-buy]").forEach((b) =>
     b.addEventListener("click", () => openCheckout(b.dataset.buy)));
   const hostBtn = document.querySelector('[data-act="open-host"]');
@@ -3986,9 +4311,51 @@ function bindScreenEvents() {
   const scanBtn = document.querySelector('[data-act="open-scan"]');
   if (scanBtn) scanBtn.addEventListener("click", showScanTicket);
 
+  // my events — tier management
+  document.querySelectorAll("[data-edit-tier]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const t = findMyTier(b.dataset.editTier);
+      if (t) showTierRenameForm(t.id, t.name, t.desc);
+    }));
+  document.querySelectorAll("[data-restock-tier]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const t = findMyTier(b.dataset.restockTier);
+      if (t) showRestockForm(t.id, t.quantityTotal);
+    }));
+  document.querySelectorAll("[data-add-tier]").forEach((b) =>
+    b.addEventListener("click", () => showAddTierForm(b.dataset.addTier)));
+  document.querySelectorAll("[data-cancel-event]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const ev = state.myEvents.find((e) => e.id === b.dataset.cancelEvent);
+      if (ev) showCancelEventConfirm(ev);
+    }));
+  document.querySelectorAll("[data-reschedule-event]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const ev = state.myEvents.find((e) => e.id === b.dataset.rescheduleEvent);
+      if (ev) showRescheduleForm(ev);
+    }));
+  document.querySelectorAll("[data-request-reschedule-refund]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const t = state.tickets.find((x) => x.id === b.dataset.requestRescheduleRefund);
+      if (t) showRequestRescheduleRefundConfirm(t);
+    }));
+
   // shop
   const shopPayoutBtn = document.querySelector("#shopSetPayout");
   if (shopPayoutBtn) shopPayoutBtn.addEventListener("click", showPayoutForm);
+  const reqVerifyBtn = document.querySelector("#requestVerificationBtn");
+  if (reqVerifyBtn) reqVerifyBtn.addEventListener("click", async () => {
+    reqVerifyBtn.disabled = true; reqVerifyBtn.textContent = "Requesting…";
+    const { error } = await sbRequestBusinessVerification(state.user.business.id);
+    if (error) { reqVerifyBtn.disabled = false; reqVerifyBtn.textContent = "Request Verification"; return toast("Couldn't request: " + error.message); }
+    const { data: biz } = await sbGetBusiness(state.user.id);
+    if (biz) {
+      state.user.business.verificationRequestedAt = biz.verification_requested_at;
+      state.user.business.rejectedAt = biz.rejected_at;
+    }
+    render();
+    toast("Verification requested — an admin will review your shop soon");
+  });
   const saleBtn = document.querySelector('[data-act="open-sale"]');
   if (saleBtn) saleBtn.addEventListener("click", showSale);
   const prodBtn = document.querySelector('[data-act="open-product"]');
@@ -4110,6 +4477,7 @@ try {
       await hydrateEvents();
       await hydratePayoutAccount();
       await hydrateFees();
+      await hydrateVerificationRequirements();
       await hydrateConversations();
       startMyMessagesWatch();
       // covers the "clicked the confirmation link, landed back here with

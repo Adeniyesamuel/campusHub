@@ -84,6 +84,40 @@ Two deliberate v1 scoping calls made during Study hub design, not yet built:
       visible to the students they're marked for (self-reported ones currently aren't
       visible to anyone but the student).
 
+## Admin panel & vendor/event management (8-item feature set, migrations 0021–0024)
+
+- [x] Admin: verification queue business name opens that shop's storefront.
+- [x] Admin: Undo action reverses a Verify/Reject decision at any time.
+- [x] Vendor-requested verification, gated on configurable thresholds
+      (`verification_requirements` table — min completed sales, min avg rating, min
+      rating count; migration 0021). Selling itself stays open to all vendors
+      regardless of verification status — verification only gates the trust badge.
+- [x] Auto-hide past events from public browsing after an 8-hour grace window
+      (organizer's own My Events is never filtered).
+- [x] Vendors can unlist their own listings (pre-existing from Phase 2); organizers
+      can delete their own zero-ticket-sold events, or cancel-with-refund events that
+      have sold tickets (migration 0023 + `cancel-event` Edge Function) — never a
+      destructive delete once money has changed hands.
+- [x] My Events screen: hosted events list, ticket tier rename/add (migration 0022).
+      Event title stays locked after publish, same as always.
+- [x] Restock: increasing a sold-out tier's `quantity_total` needed zero changes to
+      `confirm-ticket`'s oversell protection, since it re-queries live stock at
+      confirm-time rather than caching it — confirmed by direct code read before
+      building, then proven live with a real sellout + restock + repurchase.
+- [x] Reschedule flow (migration 0024 + `reschedule-refund` Edge Function): one
+      reschedule per event ever, reason required and shown permanently on the event's
+      public card, every paid ticket holder notified automatically, 72-hour
+      self-service refund window per ticket. Event title never changes, only
+      date/time/venue.
+
+**Note on reschedule notifications:** v1 reuses the existing 1:1 chat system
+(`get_or_create_conversation` + a message insert) to notify ticket holders, rather
+than a dedicated notification system. This is the right call for v1's scale, but for
+large events (hundreds/thousands of ticket holders) a real notification system
+(push/email/in-app notification feed, not one chat thread per buyer) would be a more
+appropriate upgrade — revisit if/when event sizes grow past what a chat-based
+approach comfortably serves.
+
 ## Deferred during Phase 1 (auth)
 
 - [ ] Google OAuth — button is a "coming soon" stub (needs a Google Cloud OAuth client

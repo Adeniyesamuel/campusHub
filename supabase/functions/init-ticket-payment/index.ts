@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
     const tierIds = tier_selections.map((t: any) => t.tier_id);
     const { data: tiers, error: tiersErr } = await admin
       .from("ticket_tiers")
-      .select("id, price, event_id, events(organizer_id)")
+      .select("id, price, event_id, events(organizer_id, cancelled_at)")
       .in("id", tierIds);
     if (tiersErr) return json({ error: tiersErr.message }, 500);
     if (!tiers || tiers.length !== new Set(tierIds).size) {
@@ -71,6 +71,9 @@ Deno.serve(async (req) => {
     const eventId = (tiers[0] as any).event_id;
     if (!tiers.every((t: any) => t.event_id === eventId)) {
       return json({ error: "Tiers must all belong to the same event" }, 400);
+    }
+    if ((tiers[0] as any).events?.cancelled_at) {
+      return json({ error: "This event has been cancelled" }, 409);
     }
     const organizerId = (tiers[0] as any).events?.organizer_id;
 
